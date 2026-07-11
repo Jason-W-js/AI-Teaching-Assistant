@@ -1,0 +1,15 @@
+.env
+models/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+frontend/node_modules/
+frontend/dist/
+tools/spreadsheet/node_modules/
+*.inspect.ndjson
+data/vector_stores/*/*.tmp
+data/uploads/
+data/session_memory/
+tmp/
+logs/

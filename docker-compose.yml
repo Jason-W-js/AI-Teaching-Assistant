@@ -1,0 +1,14 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: circuitmind-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - circuitmind_redis:/data
+    restart: unless-stopped
+
+volumes:
+  circuitmind_redis:
+
