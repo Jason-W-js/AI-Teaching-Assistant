@@ -97,7 +97,7 @@ powershell -ExecutionPolicy Bypass -File scripts/start.ps1
 
 - 本地 Ollama：自动显示 `ollama list` 中已经安装的模型。
 - DeepSeek API：默认提供 `deepseek-v4-flash` 和 `deepseek-v4-pro`。
-- 通义千问 API：默认提供 `qwen-plus`、`qwen-max` 和 `qwen-turbo`，Base URL 可按百炼工作空间修改。
+- 通义千问 API：默认优先提供支持图片问答的 `qwen3-vl-plus`，并保留 `qwen-plus`、`qwen-max` 和 `qwen-turbo`；Base URL 可按百炼工作空间修改。
 - 自定义 API：填写任意兼容 OpenAI Chat Completions 的模型名称、API Key 和 Base URL。
 
 页面输入的模型配置和 API Key 会写入当前浏览器的 `localStorage`，不会写入项目文件；配置弹窗提供清除已保存密钥的入口。公用电脑不建议保存云端密钥。也可以在 `.env` 配置 `DEEPSEEK_API_KEY`、`QWEN_API_KEY` 及对应 Base URL。使用云端多模态模型时，题目、最近对话、检索上下文和必要的电路图会发送到所选服务。
@@ -158,21 +158,21 @@ Excel 题库至少需要以下列：`题号`、`题目文本`、`知识点标签
 - `knowledge_graph.json`：Chunk—概念—电路元件关系；配置 Neo4j 后会同步到图数据库。
 - `qdrant/`：Linux/macOS 未配置 `QDRANT_URL` 时可使用 Qdrant 嵌入式持久化；同时保留 `vectors.faiss` 兼容回退。
 
-完整处理顺序为：语义清洗 → PDF-Extract-Kit 结构结果（若已配置）/PyMuPDF 可审计降级 → SINA 电路识别（若已配置）/多模态模型与 OpenCV 降级 → Netlist/描述融合 → 文本与可选 CLIP 图片向量 → Qdrant + BM25 + 本地图谱/Neo4j → 融合重排。检索命中的电路图会和结构化描述一起交给答疑模型。
+完整处理顺序为：语义清洗 → PDF-Extract-Kit Layout/MFD 结构解析 → Qwen3-VL 电路、公式和表格理解 → 元件/网络/Netlist/描述融合 → Qwen3-VL 文本与图片向量 → Qdrant + BM25 + Neo4j → 融合重排。检索命中的电路图会和结构化描述一起交给答疑模型。
 
-PDF-Extract-Kit 和 SINA 依赖较重，建议部署成独立 GPU worker，不要安装到 FastAPI 环境：
+PDF-Extract-Kit 使用本地 GPU 与官方权重，Qwen3-VL 使用百炼 API：
 
-1. PDF worker 将每本书结果导出为 `<PDF文件名不含扩展名>.json`，在 `.env` 设置 `PDF_EXTRACT_KIT_OUTPUT_DIR`。系统兼容 `elements` 或 `content_list` 列表，并读取 `page/page_idx`、`type/category`、`bbox`、`text/content`。
-2. SINA worker 暴露 `POST multipart/form-data`，字段名为 `image`，返回 `components`、`nets`、`netlist`、`description` 和 `confidence`，在 `.env` 设置 `SINA_ENDPOINT`。
-3. 设置本地 `CLIP_MODEL_PATH` 后建立独立图片向量集合；设置 `RERANK_MODEL_PATH` 后启用 CrossEncoder 重排。未配置时图片的 VLM 结构描述仍可被文本向量检索。
+1. 在 `.env` 设置 `PDF_EXTRACT_KIT_DIR=third_party/PDF-Extract-Kit`；小样联调可用 `PDF_EXTRACT_KIT_PAGE_LIMIT=3`限制页数。
+2. 设置 `QWEN_VISION_MODEL=qwen3-vl-plus` 和 `QWEN_MULTIMODAL_EMBEDDING_MODEL=qwen3-vl-embedding`；图片与文本向量默认为 1024 维。
+3. 设置 `RERANK_MODEL_PATH` 可额外启用 CrossEncoder 重排；未配置时仍使用向量、BM25、图关系和图片相似度融合。
 
 Qdrant 和 Neo4j 可用 Docker 启动：
 
 ```powershell
-docker compose up -d qdrant neo4j
+docker compose up -d qdrant redis
 ```
 
-随后设置 `QDRANT_URL=http://127.0.0.1:6333`、`NEO4J_URI=bolt://127.0.0.1:7687` 和 Neo4j 密码。若只做本机小规模验证，可不启动它们：Linux/macOS 使用 Qdrant 嵌入式模式，图检索使用 `knowledge_graph.json`；Windows 为避免嵌入式 Qdrant 与 Torch/FAISS 的本地运行库冲突，默认直接使用同一批向量的 FAISS 兼容索引，配置 Qdrant 服务地址后自动切换为 Qdrant 在线查询。
+本机 Neo4j Windows Server 可用 `powershell -File scripts/neo4j_server.ps1 -Action start` 管理；也可选择 `docker compose up -d neo4j`。随后设置 `QDRANT_URL=http://127.0.0.1:6333`、`NEO4J_URI=bolt://127.0.0.1:7687`、`NEO4J_HTTP_URL=http://127.0.0.1:7474` 和 Neo4j 密码。Windows 检索侧通过 Qdrant/Neo4j REST API 查询，避免其 Python 客户端与 Torch/FAISS 本地运行库冲突。
 
 ## 核心 API
 

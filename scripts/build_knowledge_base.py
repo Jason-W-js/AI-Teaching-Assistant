@@ -17,6 +17,16 @@ from backend.app.rag.multimodal import BuildModelConfig
 def main() -> None:
     parser = argparse.ArgumentParser(description="清洗课程资料并构建混合检索向量库")
     parser.add_argument("--knowledge-base", default="default", help="知识库标识")
+    parser.add_argument(
+        "--resources-dir",
+        type=Path,
+        help="覆盖输入资料目录；适合用抽页 PDF 做小规模联调",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="覆盖知识库输出目录",
+    )
     parser.add_argument("--chapter-limit", type=int, default=settings.initial_chapter_limit)
     parser.add_argument("--full", action="store_true", help="索引教材全部章节")
     parser.add_argument(
@@ -26,11 +36,13 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.knowledge_base == "default":
+    if args.resources_dir is not None:
+        resources_dir = args.resources_dir
+    elif args.knowledge_base == "default":
         resources_dir = settings.resources_dir
     else:
         resources_dir = settings.resources_dir / "knowledge_bases" / args.knowledge_base
-    output_dir = settings.vector_stores_dir / args.knowledge_base
+    output_dir = args.output_dir or settings.vector_stores_dir / args.knowledge_base
     meta = build_knowledge_base(
         resources_dir,
         output_dir,
@@ -46,6 +58,7 @@ def main() -> None:
                 base_url=settings.deepseek_base_url,
             )
         ),
+        knowledge_base_id=args.knowledge_base,
     )
     print(json.dumps(meta, ensure_ascii=False, indent=2))
 

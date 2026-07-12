@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import hashlib
-import os
 import re
 from pathlib import Path
 from typing import Any
@@ -12,6 +11,10 @@ import numpy as np
 
 from backend.app.config import settings
 from backend.app.rag.models import TextChunk
+from backend.app.services.qwen_multimodal_client import (
+    QwenMultimodalAPIError,
+    QwenMultimodalEmbeddingClient,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -37,12 +40,6 @@ def build_qdrant_indexes(
         return {"enabled": False, "reason": "qdrant-client not installed"}
 
     location = settings.qdrant_url.strip()
-    if os.name == "nt" and not location:
-        return {
-            "enabled": False,
-            "mode": "faiss-fallback",
-            "reason": "Windows 未配置 QDRANT_URL；避免嵌入式 Qdrant 与 Torch/FAISS 本地运行库冲突",
-        }
     client = None
     prefix = _collection_prefix(index_dir)
     text_collection = f"{prefix}_text"
@@ -80,7 +77,9 @@ def build_qdrant_indexes(
                 ))
             client.upsert(text_collection, points=points, wait=True)
 
-        image_result = _build_clip_image_collection(client, prefix, index_dir, chunks, models)
+        image_result = _build_qwen_multimodal_collection(
+            client, prefix, index_dir, chunks, models
+        )
         return {
             "enabled": True,
             "mode": "server" if location else "embedded",
@@ -96,65 +95,85 @@ def build_qdrant_indexes(
             client.close()
 
 
-def _build_clip_image_collection(
+def _build_qwen_multimodal_collection(
     client: Any,
     prefix: str,
     index_dir: Path,
     chunks: list[TextChunk],
     qmodels: Any,
 ) -> dict[str, Any]:
-    image_items = [
-        (index, chunk, index_dir / chunk.image_path)
-        for index, chunk in enumerate(chunks)
-        if chunk.image_path and (index_dir / chunk.image_path).exists()
-    ]
-    if not image_items:
-        return {"image_points": 0, "clip_enabled": False}
-    if not settings.clip_model_path:
-        return {
-            "image_points": 0,
-            "clip_enabled": False,
-            "clip_reason": "CLIP_MODEL_PATH is not configured; image descriptions remain text-searchable",
-        }
-    try:
-        import torch
-        from PIL import Image
-        from transformers import CLIPModel, CLIPProcessor
-
-        model = CLIPModel.from_pretrained(settings.clip_model_path, local_files_only=True)
-        processor = CLIPProcessor.from_pretrained(settings.clip_model_path, local_files_only=True)
-        model.eval()
-        images = [Image.open(path).convert("RGB") for _, _, path in image_items]
-        try:
-            inputs = processor(images=images, return_tensors="pt", padding=True)
-            with torch.inference_mode():
-                vectors = model.get_image_features(**inputs)
-                vectors = vectors / vectors.norm(dim=-1, keepdim=True).clamp_min(1e-12)
-            values = vectors.cpu().numpy().astype(np.float32)
-        finally:
-            for image in images:
-                image.close()
-    except Exception as exc:
-        logger.warning("CLIP image indexing failed; descriptions are still indexed: %s", exc)
-        return {"image_points": 0, "clip_enabled": False, "clip_reason": str(exc)}
-
-    collection = f"{prefix}_images"
+    if not settings.qwen_api_key:
+        return {"multimodal_points": 0, "qwen_multimodal_enabled": False, "reason": "QWEN_API_KEY 未配置"}
+    collection = f"{prefix}_multimodal"
     if client.collection_exists(collection):
         client.delete_collection(collection)
     client.create_collection(
         collection_name=collection,
-        vectors_config=qmodels.VectorParams(size=int(values.shape[1]), distance=qmodels.Distance.COSINE),
+        vectors_config=qmodels.VectorParams(
+            size=settings.qwen_multimodal_embedding_dimension,
+            distance=qmodels.Distance.COSINE,
+        ),
     )
-    points = [
-        qmodels.PointStruct(
-            id=str(uuid5(NAMESPACE_URL, f"{prefix}:image:{chunk.id}")),
-            vector=values[position].tolist(),
-            payload={"chunk_index": index, "chunk_id": chunk.id, "image_path": chunk.image_path},
-        )
-        for position, (index, chunk, _) in enumerate(image_items)
-    ]
-    client.upsert(collection, points=points, wait=True)
-    return {"image_collection": collection, "image_points": len(points), "clip_enabled": True}
+    items: list[tuple[int, TextChunk, dict[str, str]]] = []
+    for index, chunk in enumerate(chunks):
+        if chunk.image_path:
+            image_path = index_dir / chunk.image_path
+            if image_path.is_file() and image_path.stat().st_size <= 5 * 1024 * 1024:
+                import base64
+                import mimetypes
+
+                mime = mimetypes.guess_type(image_path.name)[0] or "image/png"
+                data_url = f"data:{mime};base64,{base64.b64encode(image_path.read_bytes()).decode('ascii')}"
+                items.append((index, chunk, {"image": data_url}))
+    if not items:
+        client.delete_collection(collection)
+        return {
+            "multimodal_points": 0,
+            "qwen_multimodal_enabled": False,
+            "reason": "没有可向量化的图片文件",
+        }
+    points: list[Any] = []
+    try:
+        with QwenMultimodalEmbeddingClient(
+            api_key=settings.qwen_api_key,
+            model=settings.qwen_multimodal_embedding_model,
+            endpoint=settings.qwen_multimodal_embedding_url,
+            dimension=settings.qwen_multimodal_embedding_dimension,
+        ) as embedding_client:
+            # qwen3-vl-embedding accepts at most five images per request.
+            for start in range(0, len(items), 5):
+                batch = items[start : start + 5]
+                vectors = embedding_client.embed_contents([item[2] for item in batch])
+                for (chunk_index, chunk, _), vector in zip(batch, vectors):
+                    points.append(qmodels.PointStruct(
+                        id=str(uuid5(NAMESPACE_URL, f"{prefix}:image:{chunk.id}")),
+                        vector=vector,
+                        payload={
+                            "chunk_index": chunk_index,
+                            "chunk_id": chunk.id,
+                            "modality": "image",
+                            "image_path": chunk.image_path,
+                        },
+                    ))
+                if len(points) >= 100:
+                    client.upsert(collection, points=points, wait=True)
+                    points = []
+        if points:
+            client.upsert(collection, points=points, wait=True)
+        return {
+            "multimodal_collection": collection,
+            "multimodal_points": len(items),
+            "qwen_multimodal_enabled": True,
+            "multimodal_dimension": settings.qwen_multimodal_embedding_dimension,
+        }
+    except (QwenMultimodalAPIError, OSError, ValueError) as exc:
+        logger.warning("Qwen multimodal embedding unavailable; text vectors remain active: %s", exc)
+        client.delete_collection(collection)
+        return {
+            "multimodal_points": 0,
+            "qwen_multimodal_enabled": False,
+            "reason": str(exc),
+        }
 
 
 def sync_neo4j_graph(knowledge_base: str, graph: dict[str, Any]) -> dict[str, Any]:

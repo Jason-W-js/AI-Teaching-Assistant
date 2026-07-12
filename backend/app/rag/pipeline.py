@@ -9,7 +9,6 @@ from collections import Counter
 from pathlib import Path
 from typing import Any, Iterable
 
-import faiss
 import fitz
 import numpy as np
 from docx import Document
@@ -576,6 +575,8 @@ def build_knowledge_base(
         normalize_embeddings=True,
         convert_to_numpy=True,
     ).astype(np.float32)
+    import faiss
+
     index = faiss.IndexFlatIP(embeddings.shape[1])
     index.add(embeddings)
     # FAISS' Windows file writer cannot open paths containing Chinese characters.
@@ -608,9 +609,14 @@ def build_knowledge_base(
         "knowledge_graph": {"nodes": len(graph["nodes"]), "edges": len(graph["edges"]), "neo4j": neo4j_status},
         "qdrant": qdrant_status,
         "vision_model": (
-            f"{model_config.provider}/{model_config.model}"
-            if model_config and model_config.enabled
+            f"qwen/{settings.qwen_vision_model}"
+            if settings.qwen_api_key
             else "not-configured (safe fallback)"
+        ),
+        "pdf_extract_kit": (
+            json.loads((output_dir / "pdf_extract_kit_manifest.json").read_text(encoding="utf-8"))
+            if (output_dir / "pdf_extract_kit_manifest.json").exists()
+            else {"enabled": False}
         ),
         "chapter_limit": chapter_limit,
         "sources": [path.name for path in source_files],

@@ -22,4 +22,6 @@ neo4j>=5.27,<7
 transformers>=4.46,<5
 torch>=2.2,<3
 opencv-python>=4.10,<4.12
+ultralytics==8.2.85
+omegaconf>=2.3,<3
 pytest>=8,<10

@@ -17,7 +17,9 @@ import fitz
 import httpx
 
 from backend.app.config import settings
+from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
 from backend.app.rag.models import PageDocument, TextChunk
+from backend.app.services.qwen_multimodal_client import QwenMultimodalAPIError, QwenVisionClient
 
 
 logger = logging.getLogger(__name__)
@@ -231,31 +233,19 @@ def _image_is_safe(image_bytes: bytes) -> bool:
         return False
 
 
-class SINAAdapter:
-    """HTTP adapter around a separately deployed SINA GPU worker.
+def _crop_png(image_bgr: Any, bbox: list[float]) -> bytes:
+    import cv2
 
-    The worker contract is deliberately small: multipart field ``image`` in,
-    JSON with ``components``, ``nets``, ``netlist`` and optional ``confidence`` out.
-    """
-
-    def __init__(self, endpoint: str) -> None:
-        self.endpoint = endpoint.strip()
-
-    def analyze(self, image_bytes: bytes, filename: str) -> dict[str, Any]:
-        if not self.endpoint:
-            return {}
-        try:
-            with httpx.Client(timeout=httpx.Timeout(300, connect=15)) as client:
-                response = client.post(
-                    self.endpoint,
-                    files={"image": (filename, image_bytes, "application/octet-stream")},
-                )
-                response.raise_for_status()
-            value = response.json()
-            return value if isinstance(value, dict) else {}
-        except Exception as exc:
-            logger.warning("SINA worker unavailable; using VLM/heuristic fallback: %s", exc)
-            return {}
+    height, width = image_bgr.shape[:2]
+    left = max(0, min(width - 1, int(math.floor(bbox[0]))))
+    top = max(0, min(height - 1, int(math.floor(bbox[1]))))
+    right = max(left + 1, min(width, int(math.ceil(bbox[2]))))
+    bottom = max(top + 1, min(height, int(math.ceil(bbox[3]))))
+    crop = image_bgr[top:bottom, left:right]
+    ok, encoded = cv2.imencode(".png", crop)
+    if not ok:
+        return b""
+    return encoded.tobytes()
 
 
 def _normalize_circuit_result(value: dict[str, Any]) -> dict[str, Any]:
@@ -277,42 +267,86 @@ def _normalize_circuit_result(value: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw_is_circuit, str)
         else bool(raw_is_circuit)
     )
+    # Always serialize from the structured component list. This prevents a VLM
+    # from silently inserting numeric values in an otherwise correct raw netlist.
+    netlist = _synthesize_netlist(components) if components else ""
     return {
         "is_circuit": is_circuit,
         "components": components,
         "nets": nets,
-        "netlist": str(value.get("netlist", ""))[:16000],
+        "netlist": netlist,
         "description": str(value.get("description", ""))[:8000],
         "caption": str(value.get("caption", ""))[:1000],
         "confidence": confidence,
     }
 
 
+def _synthesize_netlist(components: list[dict[str, Any]]) -> str:
+    """Create an auditable SPICE-like fallback without inventing values."""
+
+    prefixes = {
+        "resistor": "R",
+        "capacitor": "C",
+        "inductor": "L",
+        "diode": "D",
+        "voltage_source": "V",
+        "current_source": "I",
+        "bipolar_junction_transistor": "Q",
+        "bjt": "Q",
+        "npn": "Q",
+        "pnp": "Q",
+        "mosfet": "M",
+        "vsource": "V",
+        "isource": "I",
+    }
+    lines = ["* Generated from Qwen3-VL structured detection; UNKNOWN means unreadable."]
+    for position, component in enumerate(components, 1):
+        component_type = str(component.get("type", "component")).strip().lower()
+        raw_id = str(component.get("id", "")).strip()
+        terminals = component.get("terminals", [])
+        nodes = [str(item).strip() for item in terminals if str(item).strip()]
+        if component_type == "port":
+            lines.append(" ".join(["* PORT", raw_id or str(position), *nodes]))
+            continue
+        prefix = prefixes.get(component_type, "X")
+        identifier = raw_id or f"{prefix}{position}"
+        if not identifier.upper().startswith(prefix):
+            identifier = f"{prefix}{identifier}"
+        if not nodes:
+            nodes = ["UNKNOWN_NODE"]
+        value = str(component.get("value") or "UNKNOWN").strip()
+        if value.lower() in {"null", "none", "n/a", "unknown"}:
+            value = "UNKNOWN"
+        lines.append(" ".join([identifier, *nodes, value]))
+    return "\n".join(lines)
+
+
 def _analyze_image(
     element: LayoutElement,
     image_bytes: bytes,
-    client: CompatibleMultimodalClient | None,
-    sina: SINAAdapter,
+    client: QwenVisionClient | None,
 ) -> None:
     likely, heuristic_score = _circuit_image_heuristic(image_bytes)
-    raw_sina_result = sina.analyze(image_bytes, Path(element.image_path or "figure.png").name)
-    sina_result = _normalize_circuit_result(raw_sina_result)
-    prompt = f"""你是电路图结构化识别器。判断图片是否为电路图；若是，结合邻近教材正文识别所有元件、端口、节点和导线连接，输出可复核的 SPICE 风格 Netlist 和中文结构/功能描述。跨线但无连接点时不得当作连接。看不清的值写 null，不得猜测。
+    prompt = f"""你是电路图结构化识别器。判断图片是否为电路图；若是，结合邻近教材正文识别所有元件、端口、节点和导线连接，输出可复核的 SPICE 风格 Netlist 和中文结构/功能描述。跨线但无连接点时不得当作连接。看不清的值写 null，不得猜测。components.terminals 必须直接填写网络 ID；BJT 顺序为 collector/base/emitter，MOS 顺序为 drain/gate/source/bulk，其它二端元件按图中方向列出。
 附近正文：{element.nearby_text[:1800]}
 返回 JSON：{{"is_circuit":true,"caption":"","components":[{{"id":"R1","type":"resistor","value":"4 ohm","terminals":["n1","n2"],"bbox":[]}}],"nets":[{{"id":"n1","terminals":["R1.1"]}}],"netlist":"R1 n1 n2 4","description":"...","confidence":0.0}}。"""
-    raw_vlm_result = (
-        client.complete_json(
-            prompt,
-            image_bytes=image_bytes,
-            image_mime=mimetypes.guess_type(element.image_path or "figure.png")[0] or "image/png",
+    try:
+        raw_vlm_result = (
+            client.complete_json(
+                prompt,
+                image_bytes=image_bytes,
+                image_mime=mimetypes.guess_type(element.image_path or "figure.png")[0] or "image/png",
+            )
+            if client
+            else {}
         )
-        if client and client.config.enabled
-        else {}
-    )
+    except QwenMultimodalAPIError as exc:
+        logger.warning("Qwen3-VL circuit analysis failed; using local uncertain fallback: %s", exc)
+        raw_vlm_result = {}
     vlm_result = _normalize_circuit_result(raw_vlm_result)
-    result = sina_result if sina_result.get("is_circuit") else vlm_result
+    result = vlm_result
     is_circuit = bool(result.get("is_circuit")) or (
-        likely and not raw_sina_result and not raw_vlm_result
+        likely and not raw_vlm_result
     )
     if is_circuit:
         element.element_type = "circuit"
@@ -324,14 +358,57 @@ def _analyze_image(
         )
         element.caption = result.get("caption", "")
         element.confidence = float(result.get("confidence") or heuristic_score)
-        element.processor = "sina" if sina_result.get("is_circuit") else (
-            f"vlm:{client.config.provider}/{client.config.model}" if vlm_result.get("is_circuit") and client else "opencv-heuristic"
+        qwen_processor = (
+            f"qwen-vl:{client.model}"
+            if vlm_result.get("is_circuit") and client
+            else "opencv-heuristic"
+        )
+        element.processor = (
+            f"{element.processor}+{qwen_processor}"
+            if element.processor.startswith("pdf-extract-kit")
+            else qwen_processor
         )
         element.uncertain = not bool(element.components and (element.nets or element.netlist))
     else:
         element.description = result.get("description") or element.nearby_text[:1200]
         element.caption = result.get("caption", "")
         element.confidence = float(result.get("confidence") or heuristic_score)
+
+
+def _qwen_formula(
+    client: QwenVisionClient | None,
+    image_bytes: bytes,
+    nearby_text: str,
+) -> dict[str, Any]:
+    if client is None:
+        return {}
+    prompt = f"""识别图片中的电路或数学公式，只返回 JSON：
+{{"latex":"不带美元符号的标准LaTeX","description":"公式物理含义","confidence":0.0}}
+保持上下标、相量点、角度、分式和单位，不得猜测看不清的字符。
+附近教材文字：{nearby_text[:1200]}"""
+    try:
+        return client.complete_json(prompt, image_bytes=image_bytes, image_mime="image/png")
+    except QwenMultimodalAPIError as exc:
+        logger.warning("Qwen3-VL formula recognition failed: %s", exc)
+        return {}
+
+
+def _qwen_table(
+    client: QwenVisionClient | None,
+    image_bytes: bytes,
+    nearby_text: str,
+) -> dict[str, Any]:
+    if client is None:
+        return {}
+    prompt = f"""识别图片中的电路课程表格，只返回 JSON：
+{{"markdown":"完整Markdown表格","columns":["列名"],"rows":[["单元格"]],"description":"表格含义","confidence":0.0}}
+保留单位、公式和空单元格，不得编造被遮挡内容。
+附近教材文字：{nearby_text[:1200]}"""
+    try:
+        return client.complete_json(prompt, image_bytes=image_bytes, image_mime="image/png")
+    except QwenMultimodalAPIError as exc:
+        logger.warning("Qwen3-VL table recognition failed: %s", exc)
+        return {}
 
 
 def _external_pdf_extract_elements(path: Path) -> list[dict[str, Any]]:
@@ -367,7 +444,20 @@ def enhance_pdf(
 
     artifacts_dir = output_dir / "artifacts" / path.stem
     artifacts_dir.mkdir(parents=True, exist_ok=True)
-    client = CompatibleMultimodalClient(model_config) if model_config and model_config.enabled else None
+    vision_client = (
+        QwenVisionClient(
+            api_key=settings.qwen_api_key,
+            model=settings.qwen_vision_model,
+            base_url=settings.qwen_base_url,
+        )
+        if settings.qwen_api_key
+        else None
+    )
+    cleaning_client = (
+        CompatibleMultimodalClient(model_config)
+        if model_config and model_config.enabled
+        else None
+    )
     document_hash = _file_sha256(path)
     audit_path = output_dir / f"{path.stem}.cleaning_audit.json"
     decisions: dict[int, dict[str, Any]] = {}
@@ -375,7 +465,9 @@ def enhance_pdf(
         try:
             cached_audit = json.loads(audit_path.read_text(encoding="utf-8"))
             expected_method = (
-                f"llm:{client.config.provider}/{client.config.model}" if client else "rule"
+                f"llm:{cleaning_client.config.provider}/{cleaning_client.config.model}"
+                if cleaning_client
+                else "rule"
             )
             decisions = {
                 int(item["page"]): item
@@ -387,7 +479,7 @@ def enhance_pdf(
         except Exception:
             decisions = {}
     if not all(item.page in decisions for item in page_documents):
-        decisions = _page_cleaning_decisions(page_documents, client)
+        decisions = _page_cleaning_decisions(page_documents, cleaning_client)
     for decision in decisions.values():
         decision["document_hash"] = document_hash
     kept_docs = [item for item in page_documents if decisions.get(item.page, {}).get("keep", True)]
@@ -396,6 +488,13 @@ def enhance_pdf(
     external = _external_pdf_extract_elements(path)
     elements: list[LayoutElement] = []
     image_counter = 0
+    pdf_extract_kit = PDFExtractKitAdapter()
+    pdf_extract_kit.write_manifest(output_dir)
+    layout_records: list[dict[str, Any]] = []
+    analysis_pages = sorted(allowed_pages)
+    if settings.pdf_extract_kit_page_limit > 0:
+        analysis_pages = analysis_pages[: settings.pdf_extract_kit_page_limit]
+    analysis_page_set = set(analysis_pages)
     cached_images: dict[str, dict[str, Any]] = {}
     element_cache = output_dir / "multimodal_elements.jsonl"
     if element_cache.exists():
@@ -439,7 +538,136 @@ def enhance_pdf(
                 ))
                 order += 1
 
+            pdfkit_figure_count = 0
+            if page_no in analysis_page_set and pdf_extract_kit.available:
+                import cv2
+                import numpy as np
+
+                render_scale = 2.0  # PDF-Extract-Kit convention: 144 DPI from 72-DPI PDF points.
+                pixmap = page.get_pixmap(matrix=fitz.Matrix(render_scale, render_scale), alpha=False)
+                rgb = np.frombuffer(pixmap.samples, dtype=np.uint8).reshape(
+                    pixmap.height, pixmap.width, pixmap.n
+                )
+                image_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+                nearby = "\n".join(text for _, text in text_blocks)[-3000:]
+                for region in pdf_extract_kit.detect(image_bgr):
+                    bbox_points = [round(value / render_scale, 2) for value in region.bbox_pixels]
+                    layout_records.append({
+                        "source": path.name,
+                        "page": page_no,
+                        "category": region.category,
+                        "bbox_pixels": region.bbox_pixels,
+                        "bbox": bbox_points,
+                        "confidence": region.confidence,
+                        "detector": region.detector,
+                    })
+                    category = region.category.lower()
+                    if category not in {
+                        "figure", "table", "isolate_formula", "inline", "isolated"
+                    }:
+                        continue
+                    crop_bytes = _crop_png(image_bgr, region.bbox_pixels)
+                    if len(crop_bytes) < 300 or not _image_is_safe(crop_bytes):
+                        continue
+                    if category == "figure":
+                        image_counter += 1
+                        if (
+                            settings.multimodal_image_limit
+                            and image_counter > settings.multimodal_image_limit
+                        ):
+                            continue
+                    element_id, digest = _element_id(path.name, page_no, order, crop_bytes)
+                    image_path = artifacts_dir / (
+                        f"p{page_no:04d}-{element_id[:10]}-pdfkit-{category}.png"
+                    )
+                    image_path.write_bytes(crop_bytes)
+                    meta = page_meta[page_no]
+                    element = LayoutElement(
+                        id=element_id,
+                        source=path.name,
+                        page=page_no,
+                        element_type=(
+                            "image" if category == "figure"
+                            else "table" if category == "table"
+                            else "formula"
+                        ),
+                        bbox=bbox_points,
+                        image_path=str(image_path.relative_to(output_dir)).replace("\\", "/"),
+                        reading_order=order,
+                        chapter=meta.chapter,
+                        section=meta.section,
+                        nearby_text=nearby,
+                        content_hash=digest,
+                        confidence=region.confidence,
+                        processor=region.detector,
+                    )
+                    cached = cached_images.get(digest)
+                    if category == "figure":
+                        expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
+                        cache_compatible = bool(cached) and (
+                            (bool(expected_vlm) and str(cached.get("processor", "")).endswith(expected_vlm))
+                            or not expected_vlm
+                        )
+                        if cached and cache_compatible:
+                            for field_name in (
+                                "element_type", "caption", "components", "nets", "netlist",
+                                "description", "confidence", "processor", "uncertain",
+                            ):
+                                if field_name in cached:
+                                    setattr(element, field_name, cached[field_name])
+                            if element.components:
+                                element.netlist = _synthesize_netlist(element.components)
+                        else:
+                            _analyze_image(element, crop_bytes, vision_client)
+                        pdfkit_figure_count += 1
+                        page_image_count += 1
+                    elif category == "table":
+                        expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
+                        if cached and expected_vlm and str(cached.get("processor", "")).endswith(expected_vlm):
+                            for field_name in ("text", "description", "confidence", "processor", "uncertain"):
+                                if field_name in cached:
+                                    setattr(element, field_name, cached[field_name])
+                        else:
+                            result = _qwen_table(vision_client, crop_bytes, nearby)
+                            element.text = str(result.get("markdown", "")).strip()
+                            element.description = str(result.get("description", "")).strip()
+                            element.processor += (
+                                f"+{expected_vlm}" if result and expected_vlm else "+unrecognized"
+                            )
+                            try:
+                                element.confidence = max(
+                                    element.confidence, float(result.get("confidence", 0))
+                                )
+                            except (TypeError, ValueError):
+                                pass
+                            element.uncertain = not bool(element.text)
+                    else:
+                        expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
+                        if cached and expected_vlm and str(cached.get("processor", "")).endswith(expected_vlm):
+                            for field_name in ("text", "description", "confidence", "processor", "uncertain"):
+                                if field_name in cached:
+                                    setattr(element, field_name, cached[field_name])
+                        else:
+                            result = _qwen_formula(vision_client, crop_bytes, nearby)
+                            latex = str(result.get("latex", "")).strip().strip("$")
+                            element.text = f"$${latex}$$" if latex else ""
+                            element.description = str(result.get("description", "")).strip()
+                            element.processor += (
+                                f"+{expected_vlm}" if result and expected_vlm else "+unrecognized"
+                            )
+                            try:
+                                element.confidence = max(
+                                    element.confidence, float(result.get("confidence", 0))
+                                )
+                            except (TypeError, ValueError):
+                                pass
+                            element.uncertain = not bool(latex)
+                    elements.append(element)
+                    order += 1
+
             for block in blocks:
+                if pdfkit_figure_count:
+                    break
                 if int(block.get("type", -1)) != 1 or not block.get("image"):
                     continue
                 image_counter += 1
@@ -464,13 +692,10 @@ def enhance_pdf(
                     nearby_text=nearby, content_hash=digest,
                 )
                 cached = cached_images.get(digest)
-                expected_vlm = (
-                    f"vlm:{client.config.provider}/{client.config.model}" if client else ""
-                )
+                expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
                 cache_compatible = bool(cached) and (
-                    (bool(settings.sina_endpoint) and cached.get("processor") == "sina")
-                    or (bool(expected_vlm) and cached.get("processor") == expected_vlm)
-                    or (not settings.sina_endpoint and not expected_vlm)
+                    (bool(expected_vlm) and cached.get("processor") == expected_vlm)
+                    or not expected_vlm
                 )
                 if cached and cache_compatible:
                     for field_name in (
@@ -479,14 +704,16 @@ def enhance_pdf(
                     ):
                         if field_name in cached:
                             setattr(element, field_name, cached[field_name])
+                    if element.components:
+                        element.netlist = _synthesize_netlist(element.components)
                 else:
-                    _analyze_image(element, image_bytes, client, SINAAdapter(settings.sina_endpoint))
+                    _analyze_image(element, image_bytes, vision_client)
                 elements.append(element)
                 page_image_count += 1
                 order += 1
 
             # Many electronic textbooks store schematics as PDF vector paths,
-            # not raster images. Render such a page so SINA/VLM can still see it.
+            # not raster images. Render such a page so Qwen3-VL can still see it.
             if (
                 page_image_count == 0
                 and len(page.get_drawings()) >= 3
@@ -520,13 +747,10 @@ def enhance_pdf(
                     processor="pymupdf-vector-render",
                 )
                 cached = cached_images.get(digest)
-                expected_vlm = (
-                    f"vlm:{client.config.provider}/{client.config.model}" if client else ""
-                )
+                expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
                 cache_compatible = bool(cached) and (
-                    (bool(settings.sina_endpoint) and cached.get("processor") == "sina")
-                    or (bool(expected_vlm) and cached.get("processor") == expected_vlm)
-                    or (not settings.sina_endpoint and not expected_vlm)
+                    (bool(expected_vlm) and cached.get("processor") == expected_vlm)
+                    or not expected_vlm
                 )
                 if cached and cache_compatible:
                     for field_name in (
@@ -535,11 +759,15 @@ def enhance_pdf(
                     ):
                         if field_name in cached:
                             setattr(element, field_name, cached[field_name])
+                    if element.components:
+                        element.netlist = _synthesize_netlist(element.components)
                 else:
-                    _analyze_image(element, image_bytes, client, SINAAdapter(settings.sina_endpoint))
+                    _analyze_image(element, image_bytes, vision_client)
                 elements.append(element)
     finally:
         document.close()
+        if vision_client is not None:
+            vision_client.close()
 
     # External parser output enriches, but never erases, the auditable fallback extraction.
     for index, item in enumerate(external):
@@ -576,6 +804,19 @@ def enhance_pdf(
     audit = [decisions[number] for number in sorted(decisions)]
     audit_path.write_text(
         json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (output_dir / f"{path.stem}.pdf_extract_kit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "1.0",
+                "source": path.name,
+                "analyzed_pages": analysis_pages,
+                "regions": layout_records,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
     )
     return kept_docs, elements, audit
 

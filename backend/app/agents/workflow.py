@@ -589,7 +589,13 @@ class CircuitTutorEngine:
     async def _answer_retrieve(self, state: AgentState) -> AgentState:
         await _emit(state, "retrieve", "正在执行向量 + BM25 混合检索与重排", "检索 Agent")
         retriever = self.knowledge_bases.get(state.get("knowledge_base", "default"))
-        hits = await asyncio.to_thread(retriever.search, state["rewritten_query"], 6, False)
+        hits = await asyncio.to_thread(
+            retriever.search,
+            state["rewritten_query"],
+            6,
+            False,
+            state.get("attachment_images", []),
+        )
         return {"hits": hits, "sources": [hit.source_dict() for hit in hits]}
 
     async def _compose_answer_prompt(self, state: AgentState) -> AgentState:

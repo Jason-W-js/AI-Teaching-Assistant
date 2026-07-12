@@ -99,9 +99,9 @@ const fallbackModelCatalog: ModelCatalog = {
     {
       id: 'qwen',
       label: '通义千问 API',
-      description: '阿里云百炼 OpenAI 兼容接口',
-      models: ['qwen-plus', 'qwen-max', 'qwen-turbo'],
-      default_model: 'qwen-plus',
+      description: '阿里云百炼文本与多模态 OpenAI 兼容接口',
+      models: ['qwen3-vl-plus', 'qwen-plus', 'qwen-max', 'qwen-turbo'],
+      default_model: 'qwen3-vl-plus',
       base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       requires_api_key: true,
       configured: false,

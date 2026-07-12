@@ -7,6 +7,7 @@ from PIL import Image, ImageDraw
 
 from backend.app.rag.models import PageDocument, TextChunk
 from backend.app.rag.manager import KnowledgeBaseManager
+from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
 from backend.app.rag.multimodal import (
     _normalize_circuit_result,
     build_local_knowledge_graph,
@@ -26,7 +27,9 @@ def _diagram_png() -> bytes:
     return buffer.getvalue()
 
 
-def test_pdf_fallback_preserves_layout_and_image_metadata(tmp_path):
+def test_pdf_fallback_preserves_layout_and_image_metadata(tmp_path, monkeypatch):
+    # Unit tests exercise the auditable fallback without loading 400 MB GPU models.
+    monkeypatch.setattr(PDFExtractKitAdapter, "detect", lambda _self, _image: [])
     pdf_path = tmp_path / "lesson.pdf"
     pdf = fitz.open()
     page = pdf.new_page(width=500, height=700)
@@ -81,6 +84,25 @@ def test_malformed_vision_json_is_safely_normalized():
     assert value["is_circuit"] is False
     assert value["components"] == [{"id": "R2", "type": "resistor"}]
     assert value["nets"] == [{"id": "n1"}]
+
+
+def test_missing_netlist_is_synthesized_without_inventing_values():
+    value = _normalize_circuit_result({
+        "is_circuit": True,
+        "components": [
+            {
+                "id": "R1",
+                "type": "resistor",
+                "value": None,
+                "terminals": ["n1", "n2"],
+            }
+        ],
+        "nets": [{"id": "n1", "terminals": ["R1.1"]}],
+        "netlist": "",
+    })
+
+    assert value["netlist"].startswith("* Generated from Qwen3-VL")
+    assert "R1 n1 n2 UNKNOWN" in value["netlist"]
 
 
 def test_index_activation_replaces_complete_directory(tmp_path):

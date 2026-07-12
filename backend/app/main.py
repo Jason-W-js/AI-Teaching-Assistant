@@ -233,9 +233,9 @@ async def available_models() -> dict[str, Any]:
             {
                 "id": "qwen",
                 "label": "通义千问 API",
-                "description": "阿里云百炼 OpenAI 兼容接口",
-                "models": ["qwen-plus", "qwen-max", "qwen-turbo"],
-                "default_model": "qwen-plus",
+                "description": "阿里云百炼文本与多模态 OpenAI 兼容接口",
+                "models": [settings.qwen_vision_model, "qwen-plus", "qwen-max", "qwen-turbo"],
+                "default_model": settings.qwen_vision_model,
                 "base_url": settings.qwen_base_url,
                 "requires_api_key": True,
                 "configured": bool(settings.qwen_api_key),
