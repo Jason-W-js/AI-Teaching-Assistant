@@ -17,11 +17,12 @@ import fitz
 import httpx
 
 from backend.app.config import settings
-from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
+from backend.app.rag.pdf_extract_kit import DetectedRegion, PDFExtractKitAdapter
 from backend.app.rag.models import PageDocument, TextChunk
 from backend.app.rag.ontology import (
     COMPONENT_CONCEPTS,
     extract_course_concepts,
+    extract_formula_concepts,
     is_course_concept,
     meaningful_section,
 )
@@ -268,6 +269,184 @@ def _overlapping_text(
         if horizontal > 0 and vertical > 0:
             matches.append(text)
     return "\n".join(matches).strip()
+
+
+def _localized_nearby_text(
+    target_bbox: list[float],
+    text_blocks: list[tuple[list[float], str]],
+    *,
+    vertical_margin: float = 72.0,
+) -> str:
+    """Return nearby prose without attaching the whole page to every element."""
+
+    left, top, right, bottom = target_bbox
+    candidates: list[tuple[float, str]] = []
+    for bbox, text in text_blocks:
+        block_left, block_top, block_right, block_bottom = bbox
+        horizontal_overlap = min(right, block_right) - max(left, block_left)
+        same_column = horizontal_overlap > 0 or not (
+            block_right < left - 48 or block_left > right + 48
+        )
+        vertical_gap = max(0.0, top - block_bottom, block_top - bottom)
+        if same_column and vertical_gap <= vertical_margin:
+            candidates.append((vertical_gap, text))
+    return "\n".join(text for _, text in sorted(candidates, key=lambda item: item[0])[:3])[:1800]
+
+
+def _formula_text_from_words(page: fitz.Page, bbox: list[float]) -> str:
+    """Extract only glyphs inside a formula box instead of its containing paragraph."""
+
+    words: list[tuple[float, float, float, float, str, int, int, int]] = []
+    target = fitz.Rect(*bbox)
+    for raw in page.get_text("words"):
+        word_rect = fitz.Rect(raw[:4])
+        intersection = target & word_rect
+        if intersection.is_empty:
+            continue
+        overlap = intersection.get_area() / max(word_rect.get_area(), 1e-6)
+        if overlap >= 0.45:
+            words.append(raw)
+    words.sort(key=lambda item: (item[5], item[6], item[7], item[0]))
+    grouped: dict[tuple[int, int], list[str]] = {}
+    for word in words:
+        grouped.setdefault((int(word[5]), int(word[6])), []).append(str(word[4]))
+    lines = ["".join(parts) for _, parts in sorted(grouped.items())]
+    return "\n".join(line for line in lines if line).strip()
+
+
+def _formula_latex_from_pdf_geometry(page: fitz.Page, bbox: list[float]) -> str:
+    """Recover display-math structure from native PDF spans and coordinates."""
+
+    blocks = page.get_text("dict", clip=fitz.Rect(*bbox)).get("blocks", [])
+    lines: list[dict[str, Any]] = []
+    max_size = 0.0
+    for block in blocks:
+        if int(block.get("type", -1)) != 0:
+            continue
+        for line in block.get("lines", []):
+            spans = [span for span in line.get("spans", []) if str(span.get("text", "")).strip()]
+            if not spans:
+                continue
+            max_size = max(max_size, *(float(span.get("size", 0)) for span in spans))
+            lines.append({"bbox": list(line.get("bbox", [0, 0, 0, 0])), "spans": spans})
+    if not lines or max_size <= 0:
+        return ""
+
+    def format_span(span: dict[str, Any]) -> str:
+        text = re.sub(r"\s+", "", str(span.get("text", "")))
+        text = text.replace("β", r"\beta ").replace("α", r"\alpha ")
+        text = text.replace("γ", r"\gamma ").replace("Δ", r"\Delta ")
+        if not text:
+            return ""
+        if float(span.get("size", 0)) <= max_size * 0.72:
+            return "_{" + text + "}"
+        return text
+
+    for line in lines:
+        line["latex"] = "".join(format_span(span) for span in line["spans"])
+        main_origins = [
+            float(span.get("origin", [0, 0])[1])
+            for span in line["spans"]
+            if float(span.get("size", 0)) > max_size * 0.72
+        ]
+        line["baseline"] = sum(main_origins) / len(main_origins) if main_origins else float(line["bbox"][3])
+
+    equality_lines = [line for line in lines if "=" in str(line["latex"])]
+    if equality_lines:
+        equality = min(equality_lines, key=lambda item: float(item["bbox"][0]))
+        baseline = float(equality["baseline"])
+        rhs_lines = [
+            line for line in lines
+            if line is not equality and float(line["bbox"][0]) >= float(equality["bbox"][2]) - 1
+        ]
+        numerator = [line for line in rhs_lines if float(line["baseline"]) < baseline - 4]
+        denominator = [line for line in rhs_lines if float(line["baseline"]) > baseline + 4]
+        if numerator and denominator:
+            top = "".join(str(line["latex"]) for line in sorted(numerator, key=lambda item: item["bbox"][0]))
+            bottom = "".join(str(line["latex"]) for line in sorted(denominator, key=lambda item: item["bbox"][0]))
+            latex = str(equality["latex"]) + rf"\frac{{{top}}}{{{bottom}}}"
+        else:
+            same_baseline = [
+                line for line in rhs_lines if abs(float(line["baseline"]) - baseline) <= 4
+            ]
+            latex = str(equality["latex"]) + "".join(
+                str(line["latex"]) for line in sorted(same_baseline, key=lambda item: item["bbox"][0])
+            )
+    else:
+        latex = "".join(str(line["latex"]) for line in sorted(lines, key=lambda item: (item["baseline"], item["bbox"][0])))
+
+    latex = re.sub(r"\s+", " ", latex).strip()
+    return latex if re.search(r"[=+\-\\]", latex) else ""
+
+
+def _normalize_formula_result(value: dict[str, Any], fallback_text: str) -> dict[str, Any]:
+    raw_is_formula = value.get("is_formula", bool(value.get("latex") or fallback_text))
+    is_formula = (
+        raw_is_formula.strip().lower() in {"true", "1", "yes", "是"}
+        if isinstance(raw_is_formula, str)
+        else bool(raw_is_formula)
+    )
+    latex = str(value.get("latex", "")).strip().strip("$")
+    plain_text = str(value.get("plain_text", "")).strip()
+    if not latex:
+        plain_text = plain_text or re.sub(r"\s+", "", fallback_text)
+    try:
+        confidence = max(0.0, min(1.0, float(value.get("confidence", 0))))
+    except (TypeError, ValueError):
+        confidence = 0.0
+    valid_content = latex or plain_text
+    if len(valid_content) > 600 or not re.search(r"[A-Za-z0-9α-ωΑ-Ω=]", valid_content):
+        is_formula = False
+    return {
+        "is_formula": is_formula,
+        "latex": latex,
+        "plain_text": plain_text,
+        "variables": value.get("variables", []) if isinstance(value.get("variables"), list) else [],
+        "confidence": confidence,
+    }
+
+
+def _recognize_formula(
+    client: QwenVisionClient | None,
+    image_bytes: bytes,
+    fallback_text: str,
+    nearby_text: str,
+) -> dict[str, Any]:
+    """Recognize one display formula; inline math stays embedded in prose."""
+
+    if client is None:
+        return _normalize_formula_result({}, fallback_text)
+    prompt = f"""你是电子电路教材公式识别器。图片只包含一个独立公式。
+输出严格 JSON：{{"is_formula":true,"latex":"不含外层美元符号的 LaTeX","plain_text":"便于全文检索的线性文本","variables":[{{"symbol":"I_BQ","meaning":"静态基极电流"}}],"confidence":0.0}}。
+要求：准确恢复上下标、希腊字母、分数、绝对值、单位与公式编号；不得把邻近正文补进公式，不清楚的字符使用 ?，不得猜造数值。
+邻近正文仅用于消歧：{nearby_text[:800]}"""
+    try:
+        result = client.complete_json(prompt, image_bytes=image_bytes, image_mime="image/png")
+    except QwenMultimodalAPIError as exc:
+        logger.warning("Qwen3-VL formula recognition failed; using PDF text fallback: %s", exc)
+        result = {}
+    return _normalize_formula_result(result, fallback_text)
+
+
+def _indexable_pdfkit_regions(regions: list[DetectedRegion]) -> list[DetectedRegion]:
+    """Keep structural regions and display formulas, never one node per inline symbol."""
+
+    layout_formulas = [
+        region
+        for region in regions
+        if region.category.lower() == "isolate_formula"
+        and region.detector.endswith(":layout")
+    ]
+    selected: list[DetectedRegion] = []
+    for region in regions:
+        category = region.category.lower()
+        if category in {"figure", "table"}:
+            selected.append(region)
+        elif category == "isolate_formula":
+            selected.append(region)
+        elif category in {"isolated", "isolated_formula"} and not layout_formulas:
+            selected.append(region)
+    return selected
 
 
 def _circuit_image_heuristic(image_bytes: bytes) -> tuple[bool, float]:
@@ -621,7 +800,13 @@ def enhance_pdf(
             order = 0
             page_image_count = 0
             for bbox, text in text_blocks:
-                element_type = "table" if _looks_like_table(text) else "formula" if _looks_like_formula(text) else "text"
+                element_type = (
+                    "table"
+                    if _looks_like_table(text)
+                    else "formula"
+                    if not pdf_extract_kit.available and _looks_like_formula(text)
+                    else "text"
+                )
                 element_id, digest = _element_id(path.name, page_no, order, text)
                 meta = page_meta[page_no]
                 elements.append(LayoutElement(
@@ -643,8 +828,8 @@ def enhance_pdf(
                     pixmap.height, pixmap.width, pixmap.n
                 )
                 image_bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
-                nearby = "\n".join(text for _, text in text_blocks)[-3000:]
-                for region in pdf_extract_kit.detect(image_bgr):
+                detected_regions = pdf_extract_kit.detect(image_bgr)
+                for region in detected_regions:
                     bbox_points = [round(value / render_scale, 2) for value in region.bbox_pixels]
                     layout_records.append({
                         "source": path.name,
@@ -655,11 +840,9 @@ def enhance_pdf(
                         "confidence": region.confidence,
                         "detector": region.detector,
                     })
+                for region in _indexable_pdfkit_regions(detected_regions):
+                    bbox_points = [round(value / render_scale, 2) for value in region.bbox_pixels]
                     category = region.category.lower()
-                    if category not in {
-                        "figure", "table", "isolate_formula", "inline", "isolated"
-                    }:
-                        continue
                     crop_bytes = _crop_png(image_bgr, region.bbox_pixels)
                     if len(crop_bytes) < 300 or not _image_is_safe(crop_bytes):
                         continue
@@ -676,6 +859,7 @@ def enhance_pdf(
                     )
                     image_path.write_bytes(crop_bytes)
                     meta = page_meta[page_no]
+                    nearby = _localized_nearby_text(bbox_points, text_blocks)
                     element = LayoutElement(
                         id=element_id,
                         source=path.name,
@@ -737,13 +921,59 @@ def enhance_pdf(
                                 pass
                             element.uncertain = not bool(element.text)
                     else:
-                        # Formula detection/localization belongs to PDF-Extract-Kit.
-                        # Reuse the overlapping PDF text layer instead of sending
-                        # dozens of tiny crops to the circuit-vision model.
-                        element.text = _overlapping_text(bbox_points, text_blocks)
-                        element.description = "PDF-Extract-Kit 公式区域（保留原页坐标）"
-                        element.processor += "+pymupdf-text"
-                        element.uncertain = not bool(element.text)
+                        fallback_text = _formula_text_from_words(page, bbox_points)
+                        native_latex = _formula_latex_from_pdf_geometry(page, bbox_points)
+                        expected_processor = (
+                            "pymupdf-geometry-latex"
+                            if native_latex
+                            else f"formula-vl:{vision_client.model}"
+                            if vision_client
+                            else "pymupdf-formula"
+                        )
+                        cache_compatible = bool(cached) and (
+                            str(cached.get("processor", "")).endswith(expected_processor)
+                        )
+                        if cache_compatible:
+                            for field_name in (
+                                "text", "description", "confidence", "processor", "uncertain"
+                            ):
+                                if field_name in cached:
+                                    setattr(element, field_name, cached[field_name])
+                        else:
+                            result = (
+                                _normalize_formula_result(
+                                    {
+                                        "is_formula": True,
+                                        "latex": native_latex,
+                                        "plain_text": re.sub(r"\s+", "", fallback_text),
+                                        "confidence": 0.98,
+                                    },
+                                    fallback_text,
+                                )
+                                if native_latex
+                                else _recognize_formula(
+                                    vision_client, crop_bytes, fallback_text, nearby
+                                )
+                            )
+                            if not result["is_formula"]:
+                                continue
+                            latex = str(result.get("latex", "")).strip()
+                            plain_text = str(result.get("plain_text", "")).strip()
+                            element.text = (
+                                f"LaTeX: ${latex}$\n检索文本: {plain_text}"
+                                if latex and plain_text
+                                else f"LaTeX: ${latex}$" if latex else plain_text
+                            )
+                            variables = result.get("variables", [])
+                            if variables:
+                                element.description = "变量：" + json.dumps(
+                                    variables, ensure_ascii=False
+                                )
+                            element.processor += f"+{expected_processor}"
+                            element.confidence = max(
+                                element.confidence, float(result.get("confidence", 0))
+                            )
+                            element.uncertain = not bool(latex) or element.confidence < 0.6
                     elements.append(element)
                     order += 1
 
@@ -936,16 +1166,15 @@ def multimodal_chunks(elements: Iterable[LayoutElement]) -> list[TextChunk]:
         if semantic_key in seen_semantic:
             continue
         seen_semantic.add(semantic_key)
-        semantic_text = "\n".join(
-            part for part in (
-                element.caption,
-                element.text,
-                element.description,
-                element.nearby_text,
-            )
-            if part
-        )
+        semantic_parts = [element.caption, element.text, element.description]
+        if element.element_type != "formula":
+            semantic_parts.append(element.nearby_text)
+        semantic_text = "\n".join(part for part in semantic_parts if part)
         tags = extract_course_concepts(semantic_text, element.section)
+        if element.element_type == "formula":
+            for concept in extract_formula_concepts(element.text):
+                if concept not in tags:
+                    tags.append(concept)
         for component in element.components:
             if not isinstance(component, dict):
                 continue
@@ -1096,3 +1325,146 @@ def build_local_knowledge_graph(chunks: Iterable[TextChunk]) -> dict[str, Any]:
                     ):
                         add_edge(component_nodes[component_ref], "CONNECTED_TO", net_id)
     return {"schema_version": "2.1", "nodes": list(nodes.values()), "edges": edges}
+
+
+def project_student_knowledge_graph(graph: dict[str, Any]) -> dict[str, Any]:
+    """Collapse the provenance graph into a readable student-facing semantic map.
+
+    Chunk, formula and net nodes remain in the persisted graph for retrieval and
+    auditing. The UI receives a compact projection where those records become
+    evidence metadata instead of dozens of visible nodes and edges.
+    """
+
+    raw_nodes = {
+        str(node.get("id")): node
+        for node in graph.get("nodes", [])
+        if isinstance(node, dict) and node.get("id")
+    }
+    raw_edges = [edge for edge in graph.get("edges", []) if isinstance(edge, dict)]
+    outgoing: dict[str, list[dict[str, Any]]] = {}
+    incoming: dict[str, list[dict[str, Any]]] = {}
+    for edge in raw_edges:
+        source, target = str(edge.get("source", "")), str(edge.get("target", ""))
+        outgoing.setdefault(source, []).append(edge)
+        incoming.setdefault(target, []).append(edge)
+
+    visible: dict[str, dict[str, Any]] = {}
+    for node_id, node in raw_nodes.items():
+        if node.get("type") in {"document", "page", "concept"}:
+            visible[node_id] = dict(node)
+
+    projected_edges: list[dict[str, Any]] = []
+    seen_edges: set[tuple[str, str, str]] = set()
+
+    def add_edge(source: str, relation: str, target: str, evidence_count: int = 1) -> None:
+        key = (source, relation, target)
+        if source not in visible or target not in visible:
+            return
+        if key in seen_edges:
+            for edge in projected_edges:
+                if (edge["source"], edge["type"], edge["target"]) == key:
+                    edge["evidence_count"] = int(edge.get("evidence_count", 1)) + evidence_count
+                    return
+        seen_edges.add(key)
+        projected_edges.append({
+            "source": source,
+            "type": relation,
+            "target": target,
+            "evidence_count": evidence_count,
+        })
+
+    for edge in raw_edges:
+        if edge.get("type") == "HAS_PAGE":
+            add_edge(str(edge.get("source")), "HAS_PAGE", str(edge.get("target")))
+
+    chunk_to_page: dict[str, str] = {}
+    for edge in raw_edges:
+        if edge.get("type") == "HAS_CHUNK":
+            chunk_to_page[str(edge.get("target"))] = str(edge.get("source"))
+
+    concept_evidence: dict[str, set[str]] = {}
+    concept_pages: dict[str, set[int]] = {}
+    for edge in raw_edges:
+        if edge.get("type") != "MENTIONS":
+            continue
+        chunk_id, concept_id = str(edge.get("source")), str(edge.get("target"))
+        page_id = chunk_to_page.get(chunk_id)
+        if not page_id or concept_id not in visible:
+            continue
+        concept_evidence.setdefault(concept_id, set()).add(chunk_id)
+        page_number = raw_nodes.get(page_id, {}).get("page")
+        if isinstance(page_number, int):
+            concept_pages.setdefault(concept_id, set()).add(page_number)
+        add_edge(page_id, "COVERS", concept_id)
+
+    original_to_visible_component: dict[str, str] = {}
+    component_pages: dict[str, set[int]] = {}
+    for node_id, node in raw_nodes.items():
+        if node.get("type") != "component":
+            continue
+        name = str(node.get("name", "")).strip()
+        if not name or name.lower() in {"component", "unknown", "?"}:
+            continue
+        component_type = str(node.get("component_type", "unknown"))
+        merged_id = "component:" + hashlib.sha1(
+            f"{name.lower()}|{component_type.lower()}".encode("utf-8")
+        ).hexdigest()[:16]
+        original_to_visible_component[node_id] = merged_id
+        visible.setdefault(merged_id, {
+            "id": merged_id,
+            "type": "component",
+            "name": name,
+            "component_type": component_type,
+            "pages": [],
+            "evidence_count": 0,
+        })
+        chunk_edges = [
+            edge for edge in incoming.get(node_id, []) if edge.get("type") == "CONTAINS"
+        ]
+        for chunk_edge in chunk_edges:
+            chunk_id = str(chunk_edge.get("source"))
+            page_id = chunk_to_page.get(chunk_id)
+            page_number = raw_nodes.get(page_id or "", {}).get("page")
+            if isinstance(page_number, int):
+                component_pages.setdefault(merged_id, set()).add(page_number)
+            visible[merged_id]["evidence_count"] += 1
+        for relation in outgoing.get(node_id, []):
+            if relation.get("type") == "INSTANCE_OF":
+                add_edge(merged_id, "INSTANCE_OF", str(relation.get("target")))
+
+    for chunk_id, page_id in chunk_to_page.items():
+        chunk = raw_nodes.get(chunk_id, {})
+        if chunk.get("element_type") != "circuit":
+            continue
+        circuit_id = "circuit:" + chunk_id.removeprefix("chunk:")
+        raw_name = str(chunk.get("name") or "")
+        figure_number = re.search(r"图\s*\d+(?:\.\d+)+", raw_name)
+        page_number = raw_nodes.get(page_id, {}).get("page")
+        visible[circuit_id] = {
+            "id": circuit_id,
+            "type": "circuit",
+            "name": (
+                f"{figure_number.group(0).replace(' ', '')} 电路图"
+                if figure_number
+                else f"第 {page_number} 页电路图" if page_number else "电路图"
+            ),
+            "page": page_number,
+            "chunk_id": chunk.get("chunk_id"),
+        }
+        add_edge(page_id, "HAS_CIRCUIT", circuit_id)
+        for edge in outgoing.get(chunk_id, []):
+            component_id = original_to_visible_component.get(str(edge.get("target")))
+            if edge.get("type") == "CONTAINS" and component_id:
+                add_edge(circuit_id, "CONTAINS", component_id)
+
+    for concept_id, evidence in concept_evidence.items():
+        visible[concept_id]["evidence_count"] = len(evidence)
+        visible[concept_id]["pages"] = sorted(concept_pages.get(concept_id, set()))
+    for component_id, pages in component_pages.items():
+        visible[component_id]["pages"] = sorted(pages)
+
+    return {
+        "schema_version": "2.2-student-projection",
+        "nodes": list(visible.values()),
+        "edges": projected_edges,
+    }

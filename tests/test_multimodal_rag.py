@@ -7,16 +7,21 @@ from PIL import Image, ImageDraw
 
 from backend.app.rag.models import PageDocument, TextChunk
 from backend.app.rag.manager import KnowledgeBaseManager
-from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
+from backend.app.rag.pdf_extract_kit import DetectedRegion, PDFExtractKitAdapter
 from backend.app.rag.multimodal import (
     LayoutElement,
     _analyze_image,
+    _formula_latex_from_pdf_geometry,
+    _indexable_pdfkit_regions,
     _normalize_circuit_result,
+    _normalize_formula_result,
     _safe_partial_noise_fragment,
     build_local_knowledge_graph,
     enhance_pdf,
+    project_student_knowledge_graph,
 )
 from backend.app.services.qwen_multimodal_client import QwenMultimodalAPIError
+from backend.app.rag.ontology import extract_formula_concepts
 
 
 def _diagram_png() -> bytes:
@@ -181,3 +186,97 @@ def test_index_activation_replaces_complete_directory(tmp_path):
 
     assert (final / "version.txt").read_text(encoding="utf-8") == "new"
     assert not staging.exists()
+
+
+def test_inline_formula_regions_remain_text_evidence_only():
+    regions = [
+        DetectedRegion("inline", [0, 0, 20, 10], 0.9, "pdf-extract-kit:formula"),
+        DetectedRegion("isolated", [0, 20, 100, 60], 0.8, "pdf-extract-kit:formula"),
+        DetectedRegion("isolate_formula", [0, 22, 45, 40], 0.95, "pdf-extract-kit:layout"),
+        DetectedRegion("figure", [0, 70, 100, 170], 0.9, "pdf-extract-kit:layout"),
+    ]
+
+    selected = _indexable_pdfkit_regions(regions)
+
+    assert [region.category for region in selected] == ["isolate_formula", "figure"]
+
+
+def test_formula_recognition_normalizes_latex_and_rejects_prose():
+    formula = _normalize_formula_result(
+        {
+            "is_formula": True,
+            "latex": r"I_{BQ}=\frac{V_{BB}-U_{BEQ}}{R_b}",
+            "plain_text": "IBQ=(VBB-UBEQ)/Rb",
+            "confidence": 0.96,
+        },
+        "",
+    )
+    prose = _normalize_formula_result(
+        {"is_formula": True, "plain_text": "这只是普通正文，没有数学表达式"},
+        "",
+    )
+
+    assert formula["is_formula"] is True
+    assert formula["latex"].startswith("I_{BQ}")
+    assert prose["is_formula"] is False
+
+
+def test_native_pdf_geometry_recovers_subscripts_and_fraction():
+    pdf = fitz.open()
+    page = pdf.new_page(width=240, height=120)
+    page.insert_text((10, 55), "I", fontsize=14)
+    page.insert_text((18, 56), "BQ", fontsize=7)
+    page.insert_text((30, 55), "=", fontsize=14)
+    page.insert_text((55, 44), "V", fontsize=14)
+    page.insert_text((64, 45), "BB", fontsize=7)
+    page.insert_text((76, 44), "-U", fontsize=14)
+    page.insert_text((92, 45), "BEQ", fontsize=7)
+    page.insert_text((75, 64), "R", fontsize=14)
+    page.insert_text((84, 65), "b", fontsize=7)
+
+    latex = _formula_latex_from_pdf_geometry(page, [5, 20, 130, 80])
+    pdf.close()
+
+    assert latex == r"I_{BQ}=\frac{V_{BB}-U_{BEQ}}{R_{b}}"
+
+
+def test_formula_symbols_map_to_course_concepts():
+    concepts = extract_formula_concepts(
+        r"I_{BQ}=\frac{V_{BB}-U_{BEQ}}{R_b},\quad I_{CQ}=\beta I_{BQ}"
+    )
+
+    assert {"静态工作点", "电流放大", "直流电源", "电阻"}.issubset(concepts)
+
+
+def test_student_graph_projection_hides_chunks_formulas_and_nets():
+    chunks = [
+        TextChunk(
+            id="text-1", text="共射放大电路使用晶体管", source="lesson.pdf",
+            chapter="chapter", section="section", page_start=101, page_end=101,
+            doc_type="textbook", knowledge_tags=["晶体管"], element_type="text",
+        ),
+        TextChunk(
+            id="formula-1", text=r"I_{CQ}=\beta I_{BQ}", source="lesson.pdf",
+            chapter="chapter", section="section", page_start=101, page_end=101,
+            doc_type="multimodal", knowledge_tags=["晶体管"], element_type="formula",
+        ),
+        TextChunk(
+            id="circuit-1", text="Rb 与晶体管相连", source="lesson.pdf",
+            chapter="chapter", section="section", page_start=101, page_end=101,
+            doc_type="multimodal", knowledge_tags=["晶体管", "电阻"], element_type="circuit",
+            multimodal={
+                "components": [{"id": "Rb", "type": "resistor", "terminals": ["n1", "n2"]}],
+                "nets": [{"id": "n1", "terminals": ["Rb.1"]}],
+            },
+        ),
+    ]
+
+    projected = project_student_knowledge_graph(build_local_knowledge_graph(chunks))
+    node_types = {node["type"] for node in projected["nodes"]}
+
+    assert "chunk" not in node_types
+    assert "net" not in node_types
+    assert "formula" not in node_types
+    assert {"document", "page", "concept", "circuit", "component"}.issubset(node_types)
+    assert sum(node["type"] == "component" for node in projected["nodes"]) == 1
+    assert any(edge["type"] == "COVERS" for edge in projected["edges"])

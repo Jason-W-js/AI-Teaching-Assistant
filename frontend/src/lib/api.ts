@@ -71,22 +71,27 @@ export type ModelCatalog = {
 
 export type KnowledgeGraphNode = {
   id: string
-  type: 'concept' | 'chunk' | 'component' | 'net' | 'document' | 'page' | string
+  type: 'concept' | 'component' | 'circuit' | 'document' | 'page' | string
   name: string
   chunk_id?: string
+  page?: number
+  pages?: number[]
+  evidence_count?: number
+  component_type?: string
 }
 
 export type KnowledgeGraphEdge = {
   source: string
   target: string
   type: string
+  evidence_count?: number
 }
 
 export type KnowledgeGraph = {
   knowledge_base: string
   nodes: KnowledgeGraphNode[]
   edges: KnowledgeGraphEdge[]
-  stats: { nodes: number; edges: number; concepts: number; documents?: number; pages?: number }
+  stats: { nodes: number; edges: number; concepts: number; documents?: number; pages?: number; circuits?: number; components?: number }
 }
 
 export type MistakeItem = {

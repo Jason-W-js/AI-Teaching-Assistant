@@ -479,6 +479,42 @@ def validate_build_artifacts(
     }
 
 
+def _formula_pipeline_stats(output_dir: Path, elements: list[LayoutElement]) -> dict[str, Any]:
+    categories: Counter[str] = Counter()
+    for path in output_dir.glob("*.pdf_extract_kit.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for region in payload.get("regions", []):
+            if not isinstance(region, dict):
+                continue
+            category = str(region.get("category", "")).lower()
+            detector = str(region.get("detector", ""))
+            if detector.endswith(":formula") or category in {
+                "isolate_formula", "isolated", "isolated_formula"
+            }:
+                categories[category] += 1
+    formulas = [element for element in elements if element.element_type == "formula"]
+    return {
+        "detected_regions": sum(categories.values()),
+        "inline_regions_kept_in_text": categories.get("inline", 0),
+        "display_candidates": sum(
+            categories.get(name, 0)
+            for name in ("isolate_formula", "isolated", "isolated_formula")
+        ),
+        "indexed_formulas": len(formulas),
+        "rejected_or_merged_regions": max(0, sum(categories.values()) - len(formulas)),
+        "uncertain_formulas": sum(element.uncertain for element in formulas),
+        "recognition": (
+            "PDF-Extract-Kit localization + native PDF geometry LaTeX + "
+            f"qwen/{settings.qwen_circuit_vision_model} scan fallback"
+            if settings.qwen_api_key
+            else "PDF-Extract-Kit localization + PyMuPDF text fallback"
+        ),
+    }
+
+
 def build_knowledge_base(
     resources_dir: Path,
     output_dir: Path,
@@ -605,6 +641,7 @@ def build_knowledge_base(
         else {"enabled": False, "reason": "deferred until atomic index activation"}
     )
 
+    formula_processing = _formula_pipeline_stats(output_dir, elements)
     metadata = {
         "state": "populated",
         "schema_version": "2.1-layered-multimodal",
@@ -619,6 +656,7 @@ def build_knowledge_base(
         "layout_elements": len(elements),
         "circuit_diagrams": sum(item.element_type == "circuit" for item in elements),
         "formula_elements": sum(item.element_type == "formula" for item in elements),
+        "formula_processing": formula_processing,
         "table_elements": sum(item.element_type == "table" for item in elements),
         "discarded_pages": sum(not item.get("keep", True) for item in cleaning_audits),
         "knowledge_graph": {"nodes": len(graph["nodes"]), "edges": len(graph["edges"]), "neo4j": neo4j_status},
@@ -658,6 +696,7 @@ def build_knowledge_base(
             "text_chunks": sum(chunk.element_type == "text" for chunk in chunks),
             "circuit_diagrams": metadata["circuit_diagrams"],
             "formula_elements": metadata["formula_elements"],
+            "formula_processing": formula_processing,
             "table_elements": metadata["table_elements"],
             "circuit_vision_model": metadata["vision_model"],
         },

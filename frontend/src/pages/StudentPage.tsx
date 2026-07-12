@@ -669,26 +669,23 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
       .filter((node) => node.type === 'concept')
       .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
       .slice(0, 18)
-    const anchors = [...documents, ...pages, ...concepts]
-    const anchorIds = new Set(anchors.map((node) => node.id))
-    const relatedIds = new Set<string>()
-    graph.edges.forEach((edge) => {
-      if (anchorIds.has(edge.source)) relatedIds.add(edge.target)
-      if (anchorIds.has(edge.target)) relatedIds.add(edge.source)
-    })
-    const supports = graph.nodes.filter((node) => relatedIds.has(node.id) && !anchorIds.has(node.id)).slice(0, 32)
+    const circuits = graph.nodes.filter((node) => node.type === 'circuit').slice(0, 8)
+    const components = graph.nodes
+      .filter((node) => node.type === 'component')
+      .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
+      .slice(0, 18)
     const groups = [
       { nodes: documents, radius: 0 },
       { nodes: pages, radius: 82 },
       { nodes: concepts, radius: 165 },
-      { nodes: supports, radius: 240 },
+      { nodes: [...circuits, ...components], radius: 238 },
     ]
     const positioned = groups.flatMap((group) => group.nodes.map((node, index) => {
       const groupSize = Math.max(1, group.nodes.length)
       const angle = (Math.PI * 2 * index) / groupSize - Math.PI / 2
       return {
         ...node,
-        x: 450 + Math.cos(angle) * group.radius,
+        x: 350 + Math.cos(angle) * group.radius,
         y: 270 + Math.sin(angle) * group.radius,
         degree: degree.get(node.id) || 0,
       }
@@ -704,23 +701,35 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
   const neighbors = selectedId && graph
     ? graph.edges.filter((edge) => edge.source === selectedId || edge.target === selectedId).length
     : 0
+  const typeLabel: Record<string, string> = {
+    document: '教材',
+    page: '教材页面',
+    concept: '知识点',
+    circuit: '电路图',
+    component: '电路元件',
+  }
+  const selectedPages = selected?.pages?.length
+    ? selected.pages
+    : selected?.page
+      ? [selected.page]
+      : []
 
   if (loading) return <div className="workspace-empty"><LoaderCircle className="spin" /><strong>正在整理知识图谱…</strong></div>
   if (!graph?.nodes.length) return <div className="workspace-empty"><Network /><strong>当前知识库还没有图谱数据</strong><p>重建知识库后会自动提取知识点与资料关系。</p></div>
   return (
     <section className="feature-view graph-view">
       <div className="feature-heading">
-        <div><span>KNOWLEDGE MAP</span><h1>课程知识图谱</h1><p>点击节点查看知识点与教材片段之间的关系。</p></div>
+        <div><span>KNOWLEDGE MAP</span><h1>课程知识图谱</h1><p>展示教材、页面、知识点与电路结构；公式和文本片段作为证据收纳在节点详情中。</p></div>
         <div className="feature-stats"><strong>{graph.stats.concepts}</strong><span>知识点</span><strong>{graph.stats.pages || 0}</strong><span>页面</span><strong>{graph.stats.edges}</strong><span>关系</span></div>
       </div>
       <div className="graph-layout">
         <div className="graph-canvas">
-          <svg viewBox="0 0 900 540" role="img" aria-label="课程知识关系图">
+          <svg viewBox="0 0 700 540" role="img" aria-label="课程知识关系图">
             <g className="graph-edges">
               {visual.edges.map((edge, index) => {
                 const from = positions.get(edge.source)
                 const to = positions.get(edge.target)
-                return from && to ? <line key={`${edge.source}-${edge.target}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null
+                return from && to ? <line className={`relation-${edge.type.toLowerCase()}`} key={`${edge.source}-${edge.target}-${index}`} x1={from.x} y1={from.y} x2={to.x} y2={to.y} /> : null
               })}
             </g>
             <g>
@@ -736,16 +745,16 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
                   role="button"
                   tabIndex={0}
                 >
-                  <circle r={node.type === 'document' ? 25 : node.type === 'page' ? 16 : node.type === 'concept' ? Math.min(22, 12 + node.degree) : node.type === 'component' ? 10 : 7} />
-                  <text y={node.type === 'document' ? 40 : node.type === 'page' || node.type === 'concept' ? 32 : 21}>{node.name?.slice(0, 16) || '资料片段'}</text>
+                  <circle r={node.type === 'document' ? 25 : node.type === 'page' ? 16 : node.type === 'concept' ? Math.min(22, 12 + node.degree) : node.type === 'circuit' ? 12 : 9} />
+                  <text y={node.type === 'document' ? 40 : node.type === 'page' || node.type === 'concept' ? 32 : 23}>{node.name?.replace(/^电路图\s*[·•]\s*/, '').slice(0, 18) || typeLabel[node.type] || '资料'}</text>
                 </g>
               ))}
             </g>
           </svg>
-          <div className="graph-legend"><span><i className="document" />教材</span><span><i className="page" />页面</span><span><i className="concept" />知识点</span><span><i />教材片段/元件</span></div>
+          <div className="graph-legend"><span><i className="document" />教材</span><span><i className="page" />页面</span><span><i className="concept" />知识点</span><span><i className="circuit" />电路图</span><span><i className="component" />元件</span></div>
         </div>
         <aside className="graph-detail">
-          {selected ? <><span>{selected.type === 'concept' ? '知识点' : '资料节点'}</span><h2>{selected.name || '未命名节点'}</h2><p>连接 {neighbors} 个相关节点。可回到智能学习台围绕该知识点提问，或加入学习规划。</p><code>{selected.id}</code></> : <><Network size={28} /><h2>探索知识关系</h2><p>图中较大的绿色节点是核心知识点，外围节点对应教材章节、题目或电路结构。</p></>}
+          {selected ? <><span>{typeLabel[selected.type] || '知识节点'}</span><h2>{selected.name || '未命名节点'}</h2><p>连接 {neighbors} 个语义节点{selected.evidence_count ? `，由 ${selected.evidence_count} 条教材证据支持` : ''}。公式与正文片段不会单独铺在图中，但仍参与检索和答案引用。</p>{selectedPages.length > 0 && <div className="graph-page-list">来源页码：{selectedPages.map((page) => `第 ${page} 页`).join('、')}</div>}</> : <><Network size={28} /><h2>探索知识关系</h2><p>中心是教材与页面，绿色节点是知识点，外围仅保留电路图和去重后的关键元件。</p></>}
         </aside>
       </div>
     </section>

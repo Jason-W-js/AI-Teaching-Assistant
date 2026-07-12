@@ -56,6 +56,22 @@ def extract_course_concepts(text: str, section: str = "") -> list[str]:
     return list(dict.fromkeys(concepts))[:12]
 
 
+def extract_formula_concepts(text: str) -> list[str]:
+    """Map canonical circuit symbols to the concepts they mathematically define."""
+
+    normalized = re.sub(r"[\\{}_\s]", "", text).lower()
+    concepts: list[str] = []
+    if any(symbol in normalized for symbol in ("ibq", "icq", "ubeq", "uceq")):
+        concepts.append("静态工作点")
+    if "beta" in normalized or "β" in normalized:
+        concepts.append("电流放大")
+    if any(symbol in normalized for symbol in ("vcc", "vbb")):
+        concepts.append("直流电源")
+    if any(symbol in normalized for symbol in ("rb", "rc")):
+        concepts.append("电阻")
+    return list(dict.fromkeys(concepts))
+
+
 def is_course_concept(value: str) -> bool:
     normalized = value.strip()
     if not normalized or normalized.lower() in NON_CONCEPT_TAGS:

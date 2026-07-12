@@ -13,7 +13,7 @@ from backend.app.config import settings
 from backend.app.rag.pipeline import build_knowledge_base
 from backend.app.rag.retriever import HybridRetriever
 from backend.app.rag.multimodal import BuildModelConfig
-from backend.app.rag.multimodal import build_local_knowledge_graph
+from backend.app.rag.multimodal import build_local_knowledge_graph, project_student_knowledge_graph
 from backend.app.rag.ontology import is_course_concept
 from backend.app.rag.stores import sync_neo4j_graph
 
@@ -101,40 +101,30 @@ class KnowledgeBaseManager:
             graph = json.loads(path.read_text(encoding="utf-8"))
         else:
             graph = build_local_knowledge_graph(retriever.chunks)
-        nodes = graph.get("nodes", [])
-        edges = graph.get("edges", [])
-        # The student view focuses on concepts and their supporting chunks.
-        searchable_chunk_ids = {
-            chunk.id for chunk in retriever.chunks if chunk.doc_type != "question"
-        }
-        allowed_nodes = [
-            node for node in nodes
-            if node.get("type") in {"concept", "chunk", "component", "net", "document", "page"}
-            and (
-                node.get("type") != "concept"
-                or is_course_concept(str(node.get("name", "")))
-            )
-            and (
-                node.get("type") != "chunk"
-                or str(node.get("chunk_id", "")) in searchable_chunk_ids
-            )
+        projected = project_student_knowledge_graph(graph)
+        visible_nodes = [
+            node for node in projected.get("nodes", [])
+            if node.get("type") != "concept"
+            or is_course_concept(str(node.get("name", "")))
         ]
-        visible_nodes = allowed_nodes[:240]
         allowed_ids = {str(node.get("id")) for node in visible_nodes}
-        allowed_edges = [
-            edge for edge in edges
-            if str(edge.get("source")) in allowed_ids and str(edge.get("target")) in allowed_ids
+        visible_edges = [
+            edge for edge in projected.get("edges", [])
+            if str(edge.get("source")) in allowed_ids
+            and str(edge.get("target")) in allowed_ids
         ]
         return {
             "knowledge_base": knowledge_base,
             "nodes": visible_nodes,
-            "edges": allowed_edges[:480],
+            "edges": visible_edges,
             "stats": {
-                "nodes": len(allowed_nodes),
-                "edges": len(allowed_edges),
-                "concepts": sum(node.get("type") == "concept" for node in allowed_nodes),
-                "documents": sum(node.get("type") == "document" for node in allowed_nodes),
-                "pages": sum(node.get("type") == "page" for node in allowed_nodes),
+                "nodes": len(visible_nodes),
+                "edges": len(visible_edges),
+                "concepts": sum(node.get("type") == "concept" for node in visible_nodes),
+                "documents": sum(node.get("type") == "document" for node in visible_nodes),
+                "pages": sum(node.get("type") == "page" for node in visible_nodes),
+                "circuits": sum(node.get("type") == "circuit" for node in visible_nodes),
+                "components": sum(node.get("type") == "component" for node in visible_nodes),
             },
         }
 

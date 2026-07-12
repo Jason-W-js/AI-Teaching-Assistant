@@ -365,17 +365,21 @@ button { color: inherit; }
 .graph-node.concept circle { fill: #168278; }
 .graph-node.document circle { fill: #173f57; }
 .graph-node.page circle { fill: #3c77a6; }
+.graph-node.circuit circle { fill: #7257a8; }
 .graph-node.component circle { fill: #d28145; }
 .graph-node.selected circle { fill: #e08a45; stroke-width: 4; }
 .graph-node text { max-width: 100px; fill: #617976; font-size: 9px; text-anchor: middle; pointer-events: none; }
 .graph-node.concept text { fill: #244f4c; font-size: 10px; font-weight: 700; }
-.graph-node.document text, .graph-node.page text { fill: #254b61; font-size: 10px; font-weight: 700; }
+.graph-node.document text, .graph-node.page text, .graph-node.circuit text { fill: #254b61; font-size: 10px; font-weight: 700; }
 .graph-legend { position: absolute; left: 16px; bottom: 14px; display: flex; gap: 12px; padding: 7px 9px; color: #728885; background: rgba(255,255,255,.86); border-radius: 8px; font-size: 9px; }
 .graph-legend span { display: flex; align-items: center; gap: 4px; }
 .graph-legend i { width: 7px; height: 7px; background: #91aaa6; border-radius: 50%; }
 .graph-legend i.concept { background: #168278; }
 .graph-legend i.document { background: #173f57; }
 .graph-legend i.page { background: #3c77a6; }
+.graph-legend i.circuit { background: #7257a8; }
+.graph-legend i.component { background: #d28145; }
+.graph-page-list { margin-top: 14px; color: #607b77; font-size: 12px; line-height: 1.7; }
 .graph-detail { padding: 24px 20px; color: #6f8582; background: #fbfcfb; border-left: 1px solid #e1e9e7; }
 .graph-detail > span { color: #218177; font-size: 9px; font-weight: 800; }
 .graph-detail h2 { margin: 9px 0; color: #21484a; font-size: 17px; }
