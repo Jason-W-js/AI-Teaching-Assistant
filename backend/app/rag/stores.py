@@ -96,7 +96,7 @@ def build_qdrant_indexes(
             client.close()
 
 
-def delete_qdrant_indexes(index_dir: Path) -> None:
+def delete_qdrant_indexes(index_dir: Path, *, timeout: int = 5) -> None:
     """Remove server-side collections created for an unactivated staging index."""
 
     location = settings.qdrant_url.strip()
@@ -106,11 +106,15 @@ def delete_qdrant_indexes(index_dir: Path) -> None:
         from qdrant_client import QdrantClient
     except ImportError:
         return
-    client = QdrantClient(
-        url=location,
-        api_key=settings.qdrant_api_key or None,
-        timeout=120,
-    )
+    try:
+        client = QdrantClient(
+            url=location,
+            api_key=settings.qdrant_api_key or None,
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logger.warning("Unable to initialize Qdrant cleanup client: %s", exc)
+        return
     prefix = _collection_prefix(index_dir)
     collections = {f"{prefix}_text", f"{prefix}_multimodal"}
     meta_path = index_dir / "index_meta.json"
@@ -128,8 +132,13 @@ def delete_qdrant_indexes(index_dir: Path) -> None:
         for collection in collections:
             if client.collection_exists(collection):
                 client.delete_collection(collection)
+    except Exception as exc:
+        logger.warning("Qdrant staging cleanup failed for %s: %s", index_dir, exc)
     finally:
-        client.close()
+        try:
+            client.close()
+        except Exception:
+            pass
 
 
 def _build_qwen_multimodal_collection(

@@ -3,16 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
-import threading
+import sys
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 from backend.app.config import settings
-from backend.app.rag.pipeline import KnowledgeBaseBuildCancelled, build_knowledge_base
+from backend.app.rag.pipeline import KnowledgeBaseBuildCancelled
 from backend.app.rag.retriever import HybridRetriever
 from backend.app.rag.multimodal import BuildModelConfig
 from backend.app.rag.multimodal import build_local_knowledge_graph, project_student_knowledge_graph
@@ -28,7 +30,7 @@ class KnowledgeBaseManager:
         self._retrievers: dict[str, HybridRetriever] = {}
         self._states: dict[str, dict[str, Any]] = {}
         self._tasks: dict[str, asyncio.Task[None]] = {}
-        self._cancel_events: dict[str, threading.Event] = {}
+        self._processes: dict[str, asyncio.subprocess.Process] = {}
 
     @staticmethod
     def _now() -> str:
@@ -146,6 +148,13 @@ class KnowledgeBaseManager:
         return self._retrievers[knowledge_base]
 
     def close_all(self) -> None:
+        for process in self._processes.values():
+            if process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+        self._processes.clear()
         for retriever in self._retrievers.values():
             retriever.close()
         self._retrievers.clear()
@@ -202,10 +211,8 @@ class KnowledgeBaseManager:
         running = self._tasks.get(knowledge_base)
         if running and not running.done():
             raise RuntimeError(f"知识库 {knowledge_base} 正在构建")
-        cancel_event = threading.Event()
         started_at = self._now()
         previous_state = self._states.get(knowledge_base, {})
-        self._cancel_events[knowledge_base] = cancel_event
         self._states[knowledge_base] = {
             "id": knowledge_base,
             "state": "building",
@@ -224,7 +231,6 @@ class KnowledgeBaseManager:
                 knowledge_base,
                 chapter_limit=chapter_limit,
                 model_config=model_config,
-                cancel_event=cancel_event,
             )
         )
         return dict(self._states[knowledge_base])
@@ -232,12 +238,10 @@ class KnowledgeBaseManager:
     def cancel_build(self, knowledge_base: str) -> dict[str, Any]:
         knowledge_base = self.validate_id(knowledge_base)
         task = self._tasks.get(knowledge_base)
-        cancel_event = self._cancel_events.get(knowledge_base)
-        if task is None or task.done() or cancel_event is None:
+        if task is None or task.done():
             raise RuntimeError(f"知识库 {knowledge_base} 当前没有可取消的构建任务")
         if not self._states.get(knowledge_base, {}).get("cancellable", False):
             raise RuntimeError("构建已进入索引切换阶段，无法安全取消")
-        cancel_event.set()
         current = self._states.get(knowledge_base, {"id": knowledge_base})
         self._states[knowledge_base] = {
             **current,
@@ -247,6 +251,12 @@ class KnowledgeBaseManager:
             "cancellable": False,
             "updated_at": self._now(),
         }
+        process = self._processes.get(knowledge_base)
+        if process is not None and process.returncode is None:
+            try:
+                process.terminate()
+            except ProcessLookupError:
+                pass
         return dict(self._states[knowledge_base])
 
     async def delete(self, knowledge_base: str) -> None:
@@ -276,7 +286,62 @@ class KnowledgeBaseManager:
                 await asyncio.to_thread(shutil.rmtree, temporary, True)
         self._states.pop(knowledge_base, None)
         self._tasks.pop(knowledge_base, None)
-        self._cancel_events.pop(knowledge_base, None)
+        self._processes.pop(knowledge_base, None)
+
+    @staticmethod
+    def _read_worker_json(path: Path) -> dict[str, Any]:
+        if not path.exists():
+            return {}
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+            return value if isinstance(value, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    async def _run_build_subprocess(
+        self,
+        knowledge_base: str,
+        job_path: Path,
+        progress_path: Path,
+        result_path: Path,
+        api_key: str,
+    ) -> None:
+        environment = os.environ.copy()
+        environment["CIRCUITMIND_BUILD_API_KEY"] = api_key
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "backend.app.rag.build_worker",
+            str(job_path),
+            cwd=str(settings.root_dir),
+            env=environment,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        self._processes[knowledge_base] = process
+        wait_task = asyncio.create_task(process.wait())
+        while not wait_task.done():
+            if self._states.get(knowledge_base, {}).get("state") == "cancelling":
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+            progress = self._read_worker_json(progress_path)
+            if progress:
+                self._update_progress(
+                    knowledge_base,
+                    int(progress.get("progress", 0)),
+                    str(progress.get("stage", "building")),
+                    str(progress.get("message", "正在构建知识库")),
+                )
+            await asyncio.wait({wait_task}, timeout=0.2)
+        return_code = await wait_task
+        self._processes.pop(knowledge_base, None)
+        if self._states.get(knowledge_base, {}).get("state") == "cancelling":
+            raise KnowledgeBaseBuildCancelled("用户已取消知识库构建")
+        if return_code != 0:
+            result = self._read_worker_json(result_path)
+            raise RuntimeError(str(result.get("error") or "知识库构建进程异常退出"))
 
     async def _build(
         self,
@@ -284,13 +349,13 @@ class KnowledgeBaseManager:
         *,
         chapter_limit: int | None,
         model_config: BuildModelConfig | None,
-        cancel_event: threading.Event,
     ) -> None:
         staging_dir: Path | None = None
+        was_cancelled = False
         final_dir = self.index_dir(knowledge_base)
 
         def ensure_not_cancelled() -> None:
-            if cancel_event.is_set():
+            if self._states.get(knowledge_base, {}).get("state") == "cancelling":
                 raise KnowledgeBaseBuildCancelled("用户已取消知识库构建")
 
         async def restore_previous_index() -> None:
@@ -318,27 +383,36 @@ class KnowledgeBaseManager:
             staging_dir = final_dir.parent / f".{knowledge_base}.building-{uuid4().hex}"
             self._update_progress(knowledge_base, 2, "staging", "正在准备隔离构建目录")
             if final_dir.exists():
-                shutil.copytree(final_dir, staging_dir)
+                await asyncio.to_thread(shutil.copytree, final_dir, staging_dir)
             else:
                 staging_dir.mkdir(parents=True, exist_ok=False)
             ensure_not_cancelled()
             staged_qdrant = staging_dir / "qdrant"
             if staged_qdrant.exists():
-                shutil.rmtree(staged_qdrant)
-            meta = await asyncio.to_thread(
-                build_knowledge_base,
-                resource_dir,
-                staging_dir,
-                settings.embedding_model_path,
-                chapter_limit=chapter_limit,
-                model_config=model_config,
-                knowledge_base_id=knowledge_base,
-                sync_graph_store=False,
-                progress_callback=lambda progress, stage, message: self._update_progress(
-                    knowledge_base, progress, stage, message
-                ),
-                cancel_event=cancel_event,
+                await asyncio.to_thread(shutil.rmtree, staged_qdrant)
+            job_path = staging_dir / ".build-job.json"
+            progress_path = staging_dir / ".build-progress.json"
+            result_path = staging_dir / ".build-result.json"
+            model_payload = asdict(model_config) if model_config is not None else None
+            build_api_key = str(model_payload.pop("api_key", "")) if model_payload else ""
+            job_path.write_text(json.dumps({
+                "knowledge_base": knowledge_base,
+                "resources_dir": str(resource_dir),
+                "output_dir": str(staging_dir),
+                "embedding_model_path": str(settings.embedding_model_path),
+                "chapter_limit": chapter_limit,
+                "model_config": model_payload,
+                "progress_path": str(progress_path),
+                "result_path": str(result_path),
+            }, ensure_ascii=False), encoding="utf-8")
+            await self._run_build_subprocess(
+                knowledge_base, job_path, progress_path, result_path, build_api_key
             )
+            meta = json.loads(
+                (staging_dir / "index_meta.json").read_text(encoding="utf-8")
+            )
+            for worker_file in (job_path, progress_path, result_path):
+                worker_file.unlink(missing_ok=True)
             ensure_not_cancelled()
             self._update_progress(knowledge_base, 90, "candidate_validation", "正在验证候选索引可加载性")
             candidate = await asyncio.to_thread(
@@ -382,24 +456,30 @@ class KnowledgeBaseManager:
             }
         except KnowledgeBaseBuildCancelled:
             logger.info("Knowledge base build cancelled: %s", knowledge_base)
-            await restore_previous_index()
             cancelled_at = self._now()
+            was_cancelled = True
+            current_state = self._states.get(knowledge_base, {})
+            self._states[knowledge_base] = {
+                **current_state,
+                "id": knowledge_base,
+                "state": "cancelled",
+                "progress": 0,
+                "stage": "cancelled",
+                "message": "构建进程已终止，正在后台清理缓存",
+                "cancellable": False,
+                "updated_at": cancelled_at,
+                "completed_at": cancelled_at,
+            }
+            await restore_previous_index()
             previous_meta = (
                 self._retrievers[knowledge_base].meta
                 if knowledge_base in self._retrievers else {}
             )
             self._states[knowledge_base] = {
-                "id": knowledge_base,
-                "state": "cancelled",
+                **self._states[knowledge_base],
                 "documents": previous_meta.get("documents", 0),
                 "chunks": previous_meta.get("chunks", 0),
-                "progress": 0,
-                "stage": "cancelled",
-                "message": "构建已取消，未完成缓存已清理",
                 "available": knowledge_base in self._retrievers,
-                "cancellable": False,
-                "updated_at": cancelled_at,
-                "completed_at": cancelled_at,
             }
         except Exception as exc:
             logger.exception("Knowledge base build failed: %s", knowledge_base)
@@ -417,10 +497,28 @@ class KnowledgeBaseManager:
                 "updated_at": self._now(),
             }
         finally:
+            process = self._processes.pop(knowledge_base, None)
+            if process is not None and process.returncode is None:
+                try:
+                    process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=3)
+                except asyncio.TimeoutError:
+                    process.kill()
+                    await process.wait()
             if staging_dir is not None and staging_dir.exists():
-                await asyncio.to_thread(delete_qdrant_indexes, staging_dir)
-                await asyncio.to_thread(shutil.rmtree, staging_dir, True)
-            self._cancel_events.pop(knowledge_base, None)
+                try:
+                    await asyncio.to_thread(delete_qdrant_indexes, staging_dir)
+                finally:
+                    await asyncio.to_thread(shutil.rmtree, staging_dir, True)
+            if was_cancelled and knowledge_base in self._states:
+                self._states[knowledge_base] = {
+                    **self._states[knowledge_base],
+                    "message": "构建已取消，未完成缓存已清理",
+                    "updated_at": self._now(),
+                }
 
     @staticmethod
     def _activate_index(final_dir: Path, staging_dir: Path) -> None:

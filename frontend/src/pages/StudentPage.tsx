@@ -9,6 +9,7 @@ import {
   Progress,
   Segmented,
   Select,
+  Slider,
   Tag,
   Tooltip,
   Upload,
@@ -667,6 +668,41 @@ function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent:
 
 function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loading: boolean }) {
   const [selectedId, setSelectedId] = useState('')
+  const [rangeMode, setRangeMode] = useState<'core' | 'extended' | 'all' | 'custom'>('core')
+  const [limits, setLimits] = useState({ concepts: 18, pages: 10, structures: 26 })
+  const totals = useMemo(() => ({
+    concepts: graph?.nodes.filter((node) => node.type === 'concept').length || 0,
+    pages: graph?.nodes.filter((node) => node.type === 'page').length || 0,
+    structures: graph?.nodes.filter((node) => node.type === 'circuit' || node.type === 'component').length || 0,
+  }), [graph])
+
+  const presetLimits = (mode: 'core' | 'extended' | 'all') => ({
+    concepts: mode === 'all' ? totals.concepts : Math.min(totals.concepts, mode === 'core' ? 18 : 36),
+    pages: mode === 'all' ? totals.pages : Math.min(totals.pages, mode === 'core' ? 10 : 30),
+    structures: mode === 'all' ? totals.structures : Math.min(totals.structures, mode === 'core' ? 26 : 48),
+  })
+
+  useEffect(() => {
+    setRangeMode('core')
+    setLimits({
+      concepts: Math.min(totals.concepts, 18),
+      pages: Math.min(totals.pages, 10),
+      structures: Math.min(totals.structures, 26),
+    })
+    setSelectedId('')
+  }, [graph?.knowledge_base])
+
+  const chooseRangeMode = (value: string | number) => {
+    const mode = String(value) as 'core' | 'extended' | 'all' | 'custom'
+    setRangeMode(mode)
+    if (mode !== 'custom') setLimits(presetLimits(mode))
+  }
+
+  const changeRange = (key: keyof typeof limits, value: number) => {
+    setRangeMode('custom')
+    setLimits((current) => ({ ...current, [key]: value }))
+  }
+
   const visual = useMemo(() => {
     if (!graph) return { nodes: [], edges: [] }
     const degree = new Map<string, number>()
@@ -678,29 +714,32 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
     const pages = graph.nodes
       .filter((node) => node.type === 'page')
       .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
-      .slice(0, 10)
+      .slice(0, limits.pages)
     const concepts = graph.nodes
       .filter((node) => node.type === 'concept')
       .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
-      .slice(0, 18)
-    const circuits = graph.nodes.filter((node) => node.type === 'circuit').slice(0, 8)
-    const components = graph.nodes
-      .filter((node) => node.type === 'component')
+      .slice(0, limits.concepts)
+    const structures = graph.nodes
+      .filter((node) => node.type === 'circuit' || node.type === 'component')
       .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
-      .slice(0, 18)
+      .slice(0, limits.structures)
     const groups = [
-      { nodes: documents, radius: 0 },
-      { nodes: pages, radius: 82 },
-      { nodes: concepts, radius: 165 },
-      { nodes: [...circuits, ...components], radius: 238 },
+      { nodes: documents, radius: 0, ringGap: 34, capacity: 1 },
+      { nodes: pages, radius: 80, ringGap: 35, capacity: 24 },
+      { nodes: concepts, radius: 210, ringGap: 38, capacity: 24 },
+      { nodes: structures, radius: 305, ringGap: 32, capacity: 28 },
     ]
     const positioned = groups.flatMap((group) => group.nodes.map((node, index) => {
-      const groupSize = Math.max(1, group.nodes.length)
-      const angle = (Math.PI * 2 * index) / groupSize - Math.PI / 2
+      const ringIndex = Math.floor(index / group.capacity)
+      const ringStart = ringIndex * group.capacity
+      const ringSize = Math.min(group.capacity, group.nodes.length - ringStart)
+      const ringPosition = index - ringStart
+      const angle = (Math.PI * 2 * ringPosition) / Math.max(1, ringSize) - Math.PI / 2
+      const radius = group.radius + ringIndex * group.ringGap
       return {
         ...node,
-        x: 350 + Math.cos(angle) * group.radius,
-        y: 270 + Math.sin(angle) * group.radius,
+        x: 400 + Math.cos(angle) * radius,
+        y: 380 + Math.sin(angle) * radius,
         degree: degree.get(node.id) || 0,
       }
     }))
@@ -709,7 +748,7 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
       nodes: positioned,
       edges: graph.edges.filter((edge) => ids.has(edge.source) && ids.has(edge.target)),
     }
-  }, [graph])
+  }, [graph, limits])
   const positions = new Map(visual.nodes.map((node) => [node.id, node]))
   const selected = graph?.nodes.find((node) => node.id === selectedId)
   const neighbors = selectedId && graph
@@ -736,9 +775,38 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
         <div><span>KNOWLEDGE MAP</span><h1>课程知识图谱</h1><p>展示教材、页面、知识点与电路结构；公式和文本片段作为证据收纳在节点详情中。</p></div>
         <div className="feature-stats"><strong>{graph.stats.concepts}</strong><span>知识点</span><strong>{graph.stats.pages || 0}</strong><span>页面</span><strong>{graph.stats.edges}</strong><span>关系</span></div>
       </div>
+      <div className="graph-scope-panel">
+        <div className="graph-scope-heading">
+          <div><strong>图谱显示范围</strong><span>当前显示 {visual.nodes.length} 个节点、{visual.edges.length} 条关系</span></div>
+          <Segmented
+            value={rangeMode}
+            onChange={chooseRangeMode}
+            options={[
+              { label: '核心', value: 'core' },
+              { label: '扩展', value: 'extended' },
+              { label: '全部', value: 'all' },
+              { label: '自定义', value: 'custom' },
+            ]}
+          />
+        </div>
+        <div className="graph-range-grid">
+          <label>
+            <span>知识点 <b>{limits.concepts}/{totals.concepts}</b></span>
+            <Slider min={0} max={Math.max(1, totals.concepts)} value={limits.concepts} disabled={!totals.concepts} onChange={(value) => changeRange('concepts', value)} />
+          </label>
+          <label>
+            <span>教材页面 <b>{limits.pages}/{totals.pages}</b></span>
+            <Slider min={0} max={Math.max(1, totals.pages)} value={limits.pages} disabled={!totals.pages} onChange={(value) => changeRange('pages', value)} />
+          </label>
+          <label>
+            <span>电路与元件 <b>{limits.structures}/{totals.structures}</b></span>
+            <Slider min={0} max={Math.max(1, totals.structures)} value={limits.structures} disabled={!totals.structures} onChange={(value) => changeRange('structures', value)} />
+          </label>
+        </div>
+      </div>
       <div className="graph-layout">
         <div className="graph-canvas">
-          <svg viewBox="0 0 700 540" role="img" aria-label="课程知识关系图">
+          <svg viewBox="0 0 800 760" role="img" aria-label="课程知识关系图">
             <g className="graph-edges">
               {visual.edges.map((edge, index) => {
                 const from = positions.get(edge.source)

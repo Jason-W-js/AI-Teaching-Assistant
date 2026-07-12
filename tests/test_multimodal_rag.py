@@ -261,15 +261,13 @@ def test_background_build_reports_progress_and_cleans_cache_on_cancel(tmp_path, 
         lambda path: cleaned_qdrant.append(path.name),
     )
 
-    def fake_build(_resources, output, _embedding_model, **kwargs):
-        output.mkdir(parents=True, exist_ok=True)
-        (output / "partial.cache").write_text("partial", encoding="utf-8")
-        kwargs["progress_callback"](42, "embedding", "正在生成向量")
-        if kwargs["cancel_event"].wait(timeout=2):
-            raise KnowledgeBaseBuildCancelled("cancelled")
-        raise RuntimeError("cancel event was not received")
+    async def fake_worker(knowledge_base, _job_path, _progress_path, _result_path, _api_key):
+        manager._update_progress(knowledge_base, 42, "embedding", "正在生成向量")
+        while manager._states[knowledge_base]["state"] != "cancelling":
+            await asyncio.sleep(0.01)
+        raise KnowledgeBaseBuildCancelled("cancelled")
 
-    monkeypatch.setattr("backend.app.rag.manager.build_knowledge_base", fake_build)
+    monkeypatch.setattr(manager, "_run_build_subprocess", fake_worker)
 
     async def scenario():
         started = manager.start_build("cancel-me")
