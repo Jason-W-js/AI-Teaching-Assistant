@@ -7,7 +7,7 @@
 - Ollama 是可选服务：可切换已安装的本地模型，或接入 DeepSeek、通义千问和自定义 OpenAI 兼容 API；Ollama 未启动时后端和学生端仍可运行，并优先使用已配置的云模型。私有思考字段不会返回前端。
 - LangGraph 编排的大模型路由 Agent、答疑 Agent、检索 Agent、出题 Agent、学习规划 Agent 和 SymPy 验算 Agent；学习规划会结合知识库资料生成可执行路线。
 - 图片出题先提取“电路拓扑、已知量、特殊条件、待求量”蓝图；连续“再出一道”会沿用最近生成题，同类题不调用知识库检索并必须通过同构校验。
-- 教材清洗、章节/段落语义切分、章/节/页码元数据、结构化题库、384 维向量化和 populated FAISS 索引。
+- 教材清洗、章节/段落语义切分、章/节/原始页码元数据、384 维向量化和 populated FAISS/Qdrant 索引；Excel/JSON 题库与课程知识库严格隔离。
 - 向量语义检索 + BM25 关键词检索 + 规则重排。
 - FastAPI、CORS、统一异常处理、日志、POST SSE 真正 token 流式输出、上传与后台重建知识库。
 - Redis 最近 N 轮会话记忆；Redis 不可用时自动切换本地持久化记忆，服务重启后仍可执行出题去重。
@@ -15,7 +15,7 @@
 - React + TypeScript + Ant Design + Zustand + KaTeX 学生端，含 LaTeX 定界符容错预处理。
 - 右上角模型选择器动态读取本机 Ollama 模型；所选模型与云端 API 配置会保存在当前浏览器，也可通过后端环境变量配置。
 - 左侧“最近学习”读取持久化会话列表，支持点击恢复历史对话；刷新页面后会自动恢复当前会话。
-- 学生端知识图谱可视化展示知识点—教材/题库片段关系；检索依据卡展示摘要、知识标签和向量/BM25/图谱评分组成。
+- 学生端知识图谱可视化展示教材—页面—知识点—教材片段—电路元件/网络关系；检索依据卡展示摘要、知识标签和向量/BM25/图谱评分组成。
 - 答疑和出题内容均可加入持久化错题本；归档前自动提取知识点，错题页可按薄弱点发起知识补全与巩固规划。
 
 ## 当前数据成果
@@ -23,8 +23,8 @@
 默认知识库先按 MVP 范围索引《模拟电子技术基础》第一章：
 
 - 教材范围：PDF 第 25–94 页，共 69 个有效文本页。
-- 示例题库：12 道题，包含题号、题目文本、知识点标签、标准答案、易错点、难度、题型、解题步骤。
-- 向量库：95 个 Chunk，向量维度 384，状态 `populated`。
+- 示例题库文件仍作为独立资源保留，但不会进入课程知识库、知识图谱或检索。
+- 向量库：83 个纯教材 Chunk，向量维度 384，题库 Chunk 为 0，状态 `populated`。
 - 元数据：每个教材 Chunk 保留来源、章、节、PDF 页码和知识点标签。
 
 主要产物位于：
@@ -32,11 +32,11 @@
 ```text
 RAG_Resources/
   模拟电子技术基础-童诗白.pdf
-  电路课程示例题库.xlsx
+  电路课程示例题库.xlsx  # 独立题库，不参与知识库构建
 data/vector_stores/default/
   cleaned_documents/
   chunks.jsonl
-  question_bank.json
+  question_bank.json      # 隔离审计占位，不含题目
   vectors.faiss
   index_meta.json
 ```
@@ -144,32 +144,33 @@ docker compose up -d redis
 学生端右侧点击“添加教材 / 新建知识库”即可：
 
 1. 选择默认知识库，或输入英文标识创建独立知识库。
-2. 上传 PDF、Word、Markdown、文本、Excel 或 JSON。
+2. 上传 PDF、Word、Markdown 或文本；Excel/JSON 题库只保存，不触发知识库构建。
 3. 后端把当前选中的模型配置仅传给本次后台任务，执行语义清洗、版面解析、电路图理解、Chunking、Embedding 和索引重载；API Key 不写入知识库产物。
 4. `/api/kb/status` 返回 `building`、`ready` 或 `error`。
 
 已有资料无需重新上传：在同一弹窗点击“使用当前模型重新构建已有资料”即可启动 v2 多模态重建。
 
-Excel 题库至少需要以下列：`题号`、`题目文本`、`知识点标签`、`标准答案`、`易错点`。其余支持列为 `难度`、`题型`、`解题步骤`。
+Excel/JSON 题库不会进入 RAG 知识库，也不会参与检索或图谱构建。出题 Agent 只依据学生原题和会话历史生成同构变式。
 
 学生交互栏的回形针按钮可上传题目图片或文档附件。图片会由当前选择且支持视觉输入的模型识别题干、参数、连接关系和知识点，再进入答疑或同类出题工作流；选择远程模型时图片会发送到对应 API。
 
-## 多模态图文知识库（v2）
+## 分层多模态图文知识库（v2.1）
 
 新版建库同时产出以下可审计数据：
 
 - `cleaning_audit.json`：DeepSeek/规则对每页的保留或丢弃决定及原因，原 PDF 永不物理修改。
 - `multimodal_elements.jsonl`：文本、公式、表格、图片、电路图的页码、bbox、阅读顺序、原图路径和内容哈希。
 - `artifacts/`：从 PDF 提取的原始图片。
-- `knowledge_graph.json`：Chunk—概念—电路元件关系；配置 Neo4j 后会同步到图数据库。
+- `knowledge_graph.json`：教材—原始页码—Chunk—课程概念—电路元件—网络关系；配置 Neo4j 后会同步到图数据库。
+- `pipeline_audit.json`：清洗、解析、模态处理、融合、检索和应用六层状态与数量审计。
 - `qdrant/`：Linux/macOS 未配置 `QDRANT_URL` 时可使用 Qdrant 嵌入式持久化；同时保留 `vectors.faiss` 兼容回退。
 
-完整处理顺序为：语义清洗 → PDF-Extract-Kit Layout/MFD 结构解析 → Qwen3-VL 电路、公式和表格理解 → 元件/网络/Netlist/描述融合 → Qwen3-VL 文本与图片向量 → Qdrant + BM25 + Neo4j → 融合重排。检索命中的电路图会和结构化描述一起交给答疑模型。
+完整处理顺序为：大模型语义清洗（带技术内容安全保留）→ PDF-Extract-Kit Layout/MFD 结构解析 → 文本 NLP 与本地公式区域处理 → `qwen3-vl-flash` 电路图识别 → 元件/网络/Netlist/描述融合 → 文本与多模态向量 → Qdrant/FAISS + BM25 + Neo4j/本地图 → 融合重排。构建结束会强制校验 Chunk/向量数量、图边完整性、bbox 与题库隔离；校验失败的暂存索引不会被激活。
 
 PDF-Extract-Kit 使用本地 GPU 与官方权重，Qwen3-VL 使用百炼 API：
 
 1. 在 `.env` 设置 `PDF_EXTRACT_KIT_DIR=third_party/PDF-Extract-Kit`；小样联调可用 `PDF_EXTRACT_KIT_PAGE_LIMIT=3`限制页数。
-2. 设置 `QWEN_VISION_MODEL=qwen3-vl-plus` 和 `QWEN_MULTIMODAL_EMBEDDING_MODEL=qwen3-vl-embedding`；图片与文本向量默认为 1024 维。
+2. 设置 `QWEN_CIRCUIT_VISION_MODEL=qwen3-vl-flash` 和 `QWEN_MULTIMODAL_EMBEDDING_MODEL=qwen3-vl-embedding`；电路图由 Flash 识别，图片与文本向量默认为 1024 维。
 3. 设置 `RERANK_MODEL_PATH` 可额外启用 CrossEncoder 重排；未配置时仍使用向量、BM25、图关系和图片相似度融合。
 
 Qdrant 和 Neo4j 可用 Docker 启动：

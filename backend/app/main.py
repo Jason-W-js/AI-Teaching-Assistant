@@ -583,7 +583,7 @@ async def upload(
             handle.write(chunk)
     await file.close()
 
-    indexable = suffix in {".pdf", ".md", ".txt", ".docx", ".xlsx", ".json"}
+    indexable = suffix in {".pdf", ".md", ".txt", ".docx"}
     if rebuild and indexable:
         provided_api_key = bool(api_key.strip())
         if model_provider == "deepseek":

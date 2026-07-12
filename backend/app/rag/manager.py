@@ -14,6 +14,7 @@ from backend.app.rag.pipeline import build_knowledge_base
 from backend.app.rag.retriever import HybridRetriever
 from backend.app.rag.multimodal import BuildModelConfig
 from backend.app.rag.multimodal import build_local_knowledge_graph
+from backend.app.rag.ontology import is_course_concept
 from backend.app.rag.stores import sync_neo4j_graph
 
 
@@ -60,6 +61,8 @@ class KnowledgeBaseManager:
                     "circuits": meta.get("circuit_diagrams", 0),
                     "layout_elements": meta.get("layout_elements", 0),
                     "schema_version": meta.get("schema_version", "1.0"),
+                    "pipeline_layers": meta.get("pipeline_layers", {}),
+                    "validation": meta.get("validation", {}),
                     "message": "索引已加载",
                 }
             except Exception as exc:
@@ -101,7 +104,21 @@ class KnowledgeBaseManager:
         nodes = graph.get("nodes", [])
         edges = graph.get("edges", [])
         # The student view focuses on concepts and their supporting chunks.
-        allowed_nodes = [node for node in nodes if node.get("type") in {"concept", "chunk", "component", "net"}]
+        searchable_chunk_ids = {
+            chunk.id for chunk in retriever.chunks if chunk.doc_type != "question"
+        }
+        allowed_nodes = [
+            node for node in nodes
+            if node.get("type") in {"concept", "chunk", "component", "net", "document", "page"}
+            and (
+                node.get("type") != "concept"
+                or is_course_concept(str(node.get("name", "")))
+            )
+            and (
+                node.get("type") != "chunk"
+                or str(node.get("chunk_id", "")) in searchable_chunk_ids
+            )
+        ]
         visible_nodes = allowed_nodes[:240]
         allowed_ids = {str(node.get("id")) for node in visible_nodes}
         allowed_edges = [
@@ -116,6 +133,8 @@ class KnowledgeBaseManager:
                 "nodes": len(allowed_nodes),
                 "edges": len(allowed_edges),
                 "concepts": sum(node.get("type") == "concept" for node in allowed_nodes),
+                "documents": sum(node.get("type") == "document" for node in allowed_nodes),
+                "pages": sum(node.get("type") == "page" for node in allowed_nodes),
             },
         }
 
@@ -205,6 +224,8 @@ class KnowledgeBaseManager:
                 "circuits": meta.get("circuit_diagrams", 0),
                 "layout_elements": meta.get("layout_elements", 0),
                 "schema_version": meta.get("schema_version", "2.0-multimodal"),
+                "pipeline_layers": meta.get("pipeline_layers", {}),
+                "validation": meta.get("validation", {}),
                 "message": "知识库已更新",
             }
         except Exception as exc:

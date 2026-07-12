@@ -23,6 +23,8 @@ export type KBStatus = {
   documents: number
   chunks: number
   message: string
+  validation?: { status?: string; question_chunks?: number }
+  pipeline_layers?: Record<string, { status?: string }>
 }
 
 export type AttachmentInfo = {
@@ -69,7 +71,7 @@ export type ModelCatalog = {
 
 export type KnowledgeGraphNode = {
   id: string
-  type: 'concept' | 'chunk' | 'component' | 'net' | string
+  type: 'concept' | 'chunk' | 'component' | 'net' | 'document' | 'page' | string
   name: string
   chunk_id?: string
 }
@@ -84,7 +86,7 @@ export type KnowledgeGraph = {
   knowledge_base: string
   nodes: KnowledgeGraphNode[]
   edges: KnowledgeGraphEdge[]
-  stats: { nodes: number; edges: number; concepts: number }
+  stats: { nodes: number; edges: number; concepts: number; documents?: number; pages?: number }
 }
 
 export type MistakeItem = {

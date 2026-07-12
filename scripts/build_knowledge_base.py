@@ -14,6 +14,24 @@ from backend.app.rag.pipeline import build_knowledge_base
 from backend.app.rag.multimodal import BuildModelConfig
 
 
+def _cleaning_model_config() -> BuildModelConfig | None:
+    if settings.deepseek_api_key:
+        return BuildModelConfig(
+            provider="deepseek",
+            model=settings.deepseek_model,
+            api_key=settings.deepseek_api_key,
+            base_url=settings.deepseek_base_url,
+        )
+    if settings.qwen_api_key:
+        return BuildModelConfig(
+            provider="qwen",
+            model=settings.qwen_cleaning_model,
+            api_key=settings.qwen_api_key,
+            base_url=settings.qwen_base_url,
+        )
+    return None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="清洗课程资料并构建混合检索向量库")
     parser.add_argument("--knowledge-base", default="default", help="知识库标识")
@@ -51,12 +69,7 @@ def main() -> None:
         model_config=(
             None
             if args.without_multimodal_llm
-            else BuildModelConfig(
-                provider="deepseek",
-                model=settings.deepseek_model,
-                api_key=settings.deepseek_api_key,
-                base_url=settings.deepseek_base_url,
-            )
+            else _cleaning_model_config()
         ),
         knowledge_base_id=args.knowledge_base,
     )

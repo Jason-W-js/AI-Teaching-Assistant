@@ -9,10 +9,14 @@ from backend.app.rag.models import PageDocument, TextChunk
 from backend.app.rag.manager import KnowledgeBaseManager
 from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
 from backend.app.rag.multimodal import (
+    LayoutElement,
+    _analyze_image,
     _normalize_circuit_result,
+    _safe_partial_noise_fragment,
     build_local_knowledge_graph,
     enhance_pdf,
 )
+from backend.app.services.qwen_multimodal_client import QwenMultimodalAPIError
 
 
 def _diagram_png() -> bytes:
@@ -75,6 +79,36 @@ def test_multimodal_chunk_and_graph_keep_circuit_relationships():
     assert any(edge["type"] == "CONNECTED_TO" for edge in graph["edges"])
 
 
+def test_graph_separates_documents_pages_concepts_and_components():
+    chunk = TextChunk(
+        id="circuit-pages",
+        text="第101页共射放大电路，Rb设置静态工作点。",
+        source="analog_electronics_pages_101_103.pdf",
+        chapter="analog_electronics_pages_101_103",
+        section="analog_electronics_pages_101_103",
+        page_start=101,
+        page_end=101,
+        doc_type="multimodal",
+        knowledge_tags=["analog_electronics_pages_101_103", "formula", "晶体管", "静态工作点"],
+        element_type="circuit",
+        multimodal={
+            "components": [{"id": "Rb", "type": "resistor", "terminals": ["n1", "n2"]}],
+            "nets": [{"id": "n1", "terminals": ["Rb.1"]}],
+        },
+    )
+    graph = build_local_knowledge_graph([chunk])
+    names_by_type = {
+        kind: {node["name"] for node in graph["nodes"] if node["type"] == kind}
+        for kind in ("document", "page", "concept", "component")
+    }
+    assert "第 101–103 页教材节选" in names_by_type["document"]
+    assert "第 101 页" in names_by_type["page"]
+    assert {"晶体管", "静态工作点", "电阻"}.issubset(names_by_type["concept"])
+    assert "formula" not in names_by_type["concept"]
+    assert "analog_electronics_pages_101_103" not in names_by_type["concept"]
+    assert "Rb" in names_by_type["component"]
+
+
 def test_malformed_vision_json_is_safely_normalized():
     value = _normalize_circuit_result({
         "is_circuit": "false",
@@ -103,6 +137,36 @@ def test_missing_netlist_is_synthesized_without_inventing_values():
 
     assert value["netlist"].startswith("* Generated from Qwen3-VL")
     assert "R1 n1 n2 UNKNOWN" in value["netlist"]
+
+
+def test_partial_cleaning_only_accepts_explicit_publishing_noise():
+    assert _safe_partial_noise_fragment("版权所有，扫码关注公众号") is True
+    assert _safe_partial_noise_fragment("Q 是英文 Quiescent 的字头") is False
+    assert _safe_partial_noise_fragment("2.2 基本共射放大电路的工作原理") is False
+
+
+def test_waveform_figure_is_not_promoted_to_circuit_when_vision_fails(monkeypatch):
+    class FailedVision:
+        model = "qwen3-vl-flash"
+
+        def complete_json(self, *_args, **_kwargs):
+            raise QwenMultimodalAPIError("invalid json")
+
+    monkeypatch.setattr(
+        "backend.app.rag.multimodal._circuit_image_heuristic",
+        lambda _image: (True, 0.85),
+    )
+    element = LayoutElement(
+        id="wave",
+        source="lesson.pdf",
+        page=103,
+        element_type="image",
+        bbox=[0, 0, 100, 100],
+        nearby_text="图2.2.3 基本共射放大电路的波形分析",
+    )
+    _analyze_image(element, _diagram_png(), FailedVision())
+    assert element.element_type == "image"
+    assert element.components == []
 
 
 def test_index_activation_replaces_complete_directory(tmp_path):

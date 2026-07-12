@@ -61,6 +61,25 @@ def test_qwen_vision_rejects_malformed_json() -> None:
         client.close()
 
 
+def test_qwen_vision_recovers_json_embedded_in_brief_prose() -> None:
+    transport = httpx.MockTransport(
+        lambda _request: httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "message": {"content": "识别结果如下：\n{\"is_circuit\": false, \"components\": []}\n完成"}
+                }]
+            },
+        )
+    )
+    client = QwenVisionClient(api_key="test-key", transport=transport)
+    try:
+        result = client.complete_json("输出 JSON")
+    finally:
+        client.close()
+    assert result == {"is_circuit": False, "components": []}
+
+
 def test_service_error_is_actionable_without_exposing_key() -> None:
     secret = "never-expose-this-key"
     transport = httpx.MockTransport(

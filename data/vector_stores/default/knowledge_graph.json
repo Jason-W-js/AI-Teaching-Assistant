@@ -1,0 +1,3533 @@
+{
+  "schema_version": "2.1",
+  "nodes": [
+    {
+      "id": "document:35d717178c8f5773",
+      "type": "document",
+      "name": "模拟电子技术基础-童诗白",
+      "source": "模拟电子技术基础-童诗白.pdf"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:25",
+      "type": "page",
+      "name": "第 25 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 25
+    },
+    {
+      "id": "chunk:857415ab0d6358de",
+      "type": "chunk",
+      "name": ". 1. 1 本征半导体",
+      "chunk_id": "857415ab0d6358de",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 25,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:18b3f9819569ecd7",
+      "type": "concept",
+      "name": ". 1. 1 本征半导体"
+    },
+    {
+      "id": "concept:6f7c790a79eebddb",
+      "type": "concept",
+      "name": "本征半导体"
+    },
+    {
+      "id": "concept:52c6c93856eeb6e9",
+      "type": "concept",
+      "name": "N型半导体"
+    },
+    {
+      "id": "concept:c9c275b395be8a18",
+      "type": "concept",
+      "name": "P型半导体"
+    },
+    {
+      "id": "concept:426482de09c45dd2",
+      "type": "concept",
+      "name": "PN结"
+    },
+    {
+      "id": "concept:5bce86f304d60cd4",
+      "type": "concept",
+      "name": "晶体管"
+    },
+    {
+      "id": "concept:7a0cd06053f15c73",
+      "type": "concept",
+      "name": "场效应管"
+    },
+    {
+      "id": "concept:b909d3368bf041a7",
+      "type": "concept",
+      "name": "单向导电性"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:26",
+      "type": "page",
+      "name": "第 26 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 26
+    },
+    {
+      "id": "chunk:695b26e010c0733b",
+      "type": "chunk",
+      "name": ". 1. 1 本征半导体",
+      "chunk_id": "695b26e010c0733b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 26,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:27",
+      "type": "page",
+      "name": "第 27 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 27
+    },
+    {
+      "id": "chunk:c813cb30623731ac",
+      "type": "chunk",
+      "name": ". 1. 2 杂质半导体",
+      "chunk_id": "c813cb30623731ac",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 27,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:b850b88f23c47558",
+      "type": "concept",
+      "name": ". 1. 2 杂质半导体"
+    },
+    {
+      "id": "chunk:98ae65058235bc71",
+      "type": "chunk",
+      "name": ". 1. 2 杂质半导体",
+      "chunk_id": "98ae65058235bc71",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 27,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:28",
+      "type": "page",
+      "name": "第 28 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 28
+    },
+    {
+      "id": "chunk:d5bb2eb358850c80",
+      "type": "chunk",
+      "name": ". 1. 2 杂质半导体",
+      "chunk_id": "d5bb2eb358850c80",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 28,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:29",
+      "type": "page",
+      "name": "第 29 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 29
+    },
+    {
+      "id": "chunk:fd716875c8dbfb56",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "fd716875c8dbfb56",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 29,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:aa4bb067c07763bb",
+      "type": "concept",
+      "name": ". 1. 3PN结"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:30",
+      "type": "page",
+      "name": "第 30 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 30
+    },
+    {
+      "id": "chunk:fc4af2b763a80a88",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "fc4af2b763a80a88",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 30,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:31",
+      "type": "page",
+      "name": "第 31 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 31
+    },
+    {
+      "id": "chunk:edbb4532778c0ef6",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "edbb4532778c0ef6",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 31,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:32",
+      "type": "page",
+      "name": "第 32 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 32
+    },
+    {
+      "id": "chunk:85c39b5c0dfc4c97",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "85c39b5c0dfc4c97",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 32,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:33",
+      "type": "page",
+      "name": "第 33 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 33
+    },
+    {
+      "id": "chunk:5949d325452b16e6",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "5949d325452b16e6",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 33,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:34",
+      "type": "page",
+      "name": "第 34 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 34
+    },
+    {
+      "id": "chunk:0edf8502272ab28e",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "0edf8502272ab28e",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 34,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:58113dd65524124f",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "58113dd65524124f",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 34,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:b3a3a54a5a3c395e",
+      "type": "concept",
+      "name": "伏安特性"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:35",
+      "type": "page",
+      "name": "第 35 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 35
+    },
+    {
+      "id": "chunk:a1e8d58eb0f80924",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "a1e8d58eb0f80924",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 35,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:5680b57305cd2b63",
+      "type": "concept",
+      "name": "二极管"
+    },
+    {
+      "id": "concept:3301ecb870b2ae9e",
+      "type": "concept",
+      "name": "反向击穿"
+    },
+    {
+      "id": "chunk:b1c9f9b05e2e1e73",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "b1c9f9b05e2e1e73",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 35,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:36",
+      "type": "page",
+      "name": "第 36 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 36
+    },
+    {
+      "id": "chunk:215d76bbe0a25e3b",
+      "type": "chunk",
+      "name": ". 1. 3PN结",
+      "chunk_id": "215d76bbe0a25e3b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 36,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:37",
+      "type": "page",
+      "name": "第 37 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 37
+    },
+    {
+      "id": "chunk:36e85b79e034b6cb",
+      "type": "chunk",
+      "name": ". 2. 1 半导体二极管的几种常见结构",
+      "chunk_id": "36e85b79e034b6cb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 37,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:e319645b291ccd2a",
+      "type": "concept",
+      "name": ". 2. 1 半导体二极管的几种常见结构"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:38",
+      "type": "page",
+      "name": "第 38 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 38
+    },
+    {
+      "id": "chunk:43fa8dc4415ab3dd",
+      "type": "chunk",
+      "name": ". 2. 2 二极管的伏安特性",
+      "chunk_id": "43fa8dc4415ab3dd",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 38,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:549557674b6dd0c0",
+      "type": "concept",
+      "name": ". 2. 2 二极管的伏安特性"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:39",
+      "type": "page",
+      "name": "第 39 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 39
+    },
+    {
+      "id": "chunk:d15745f16d4a6065",
+      "type": "chunk",
+      "name": ". 2. 4 二极管的等效电路",
+      "chunk_id": "d15745f16d4a6065",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 39,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:32dba9c6a873afdd",
+      "type": "concept",
+      "name": ". 2. 4 二极管的等效电路"
+    },
+    {
+      "id": "chunk:e0aba41afba992da",
+      "type": "chunk",
+      "name": ". 2. 4 二极管的等效电路",
+      "chunk_id": "e0aba41afba992da",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 39,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:40",
+      "type": "page",
+      "name": "第 40 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 40
+    },
+    {
+      "id": "chunk:738da4ea3ffd628a",
+      "type": "chunk",
+      "name": ". 2. 4 二极管的等效电路",
+      "chunk_id": "738da4ea3ffd628a",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 40,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:41",
+      "type": "page",
+      "name": "第 41 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 41
+    },
+    {
+      "id": "chunk:a942b4931b187e48",
+      "type": "chunk",
+      "name": ". 2. 4 二极管的等效电路",
+      "chunk_id": "a942b4931b187e48",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 41,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:42",
+      "type": "page",
+      "name": "第 42 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 42
+    },
+    {
+      "id": "chunk:83448af3e1861332",
+      "type": "chunk",
+      "name": ". 2. 5 稳压二极管",
+      "chunk_id": "83448af3e1861332",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 42,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:7edb4915d762e022",
+      "type": "concept",
+      "name": ". 2. 5 稳压二极管"
+    },
+    {
+      "id": "concept:e55eeeed26aee23e",
+      "type": "concept",
+      "name": "稳压二极管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:43",
+      "type": "page",
+      "name": "第 43 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 43
+    },
+    {
+      "id": "chunk:702a036e4b92c3ed",
+      "type": "chunk",
+      "name": ". 2. 5 稳压二极管",
+      "chunk_id": "702a036e4b92c3ed",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 43,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:44",
+      "type": "page",
+      "name": "第 44 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 44
+    },
+    {
+      "id": "chunk:5575eac4dc7900fc",
+      "type": "chunk",
+      "name": ". 2. 6 其它类型二极管",
+      "chunk_id": "5575eac4dc7900fc",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 44,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:37a418bac7e7e0d6",
+      "type": "concept",
+      "name": ". 2. 6 其它类型二极管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:45",
+      "type": "page",
+      "name": "第 45 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 45
+    },
+    {
+      "id": "chunk:a944edcae8b68940",
+      "type": "chunk",
+      "name": ". 2. 6 其它类型二极管",
+      "chunk_id": "a944edcae8b68940",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 45,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:46",
+      "type": "page",
+      "name": "第 46 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 46
+    },
+    {
+      "id": "chunk:9120fda4984bd253",
+      "type": "chunk",
+      "name": ". 2. 6 其它类型二极管",
+      "chunk_id": "9120fda4984bd253",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 46,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:61591ef122557d65",
+      "type": "chunk",
+      "name": ". 2. 6 其它类型二极管",
+      "chunk_id": "61591ef122557d65",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 46,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:47",
+      "type": "page",
+      "name": "第 47 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 47
+    },
+    {
+      "id": "chunk:9c034b75f51601ea",
+      "type": "chunk",
+      "name": ". 3. 2 晶体管的电流放大作用",
+      "chunk_id": "9c034b75f51601ea",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 47,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:fe98237934c33701",
+      "type": "concept",
+      "name": ". 3. 2 晶体管的电流放大作用"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:48",
+      "type": "page",
+      "name": "第 48 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 48
+    },
+    {
+      "id": "chunk:a5dc50d7004b9bc7",
+      "type": "chunk",
+      "name": ". 3. 2 晶体管的电流放大作用",
+      "chunk_id": "a5dc50d7004b9bc7",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 48,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:49",
+      "type": "page",
+      "name": "第 49 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 49
+    },
+    {
+      "id": "chunk:7dc496507db9f24e",
+      "type": "chunk",
+      "name": ". 3. 2 晶体管的电流放大作用",
+      "chunk_id": "7dc496507db9f24e",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 49,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:50",
+      "type": "page",
+      "name": "第 50 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 50
+    },
+    {
+      "id": "chunk:83966476d7c39408",
+      "type": "chunk",
+      "name": ". 3. 2 晶体管的电流放大作用",
+      "chunk_id": "83966476d7c39408",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 50,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:51",
+      "type": "page",
+      "name": "第 51 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 51
+    },
+    {
+      "id": "chunk:2b9c5e7553d43c05",
+      "type": "chunk",
+      "name": ". 3. 3 晶体管的共射特性曲线",
+      "chunk_id": "2b9c5e7553d43c05",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 51,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:930199cb8451b206",
+      "type": "concept",
+      "name": ". 3. 3 晶体管的共射特性曲线"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:52",
+      "type": "page",
+      "name": "第 52 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 52
+    },
+    {
+      "id": "chunk:96299a047dbe9b35",
+      "type": "chunk",
+      "name": ". 3. 3 晶体管的共射特性曲线",
+      "chunk_id": "96299a047dbe9b35",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 52,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:731943f8087b6554",
+      "type": "chunk",
+      "name": ". 3. 3 晶体管的共射特性曲线",
+      "chunk_id": "731943f8087b6554",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 52,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:53",
+      "type": "page",
+      "name": "第 53 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 53
+    },
+    {
+      "id": "chunk:618e4bee6485d9a0",
+      "type": "chunk",
+      "name": ". 3. 4 晶体管的主要参数",
+      "chunk_id": "618e4bee6485d9a0",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 53,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:ca4942b2db7d88ff",
+      "type": "concept",
+      "name": ". 3. 4 晶体管的主要参数"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:54",
+      "type": "page",
+      "name": "第 54 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 54
+    },
+    {
+      "id": "chunk:a4fac2baf6e3b653",
+      "type": "chunk",
+      "name": ". 3. 4 晶体管的主要参数",
+      "chunk_id": "a4fac2baf6e3b653",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 54,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:55",
+      "type": "page",
+      "name": "第 55 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 55
+    },
+    {
+      "id": "chunk:1f6deebc93b89f51",
+      "type": "chunk",
+      "name": ". 3. 5 温度对晶体管特性及参数的影响",
+      "chunk_id": "1f6deebc93b89f51",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 55,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:79f8e43ea7af452d",
+      "type": "concept",
+      "name": ". 3. 5 温度对晶体管特性及参数的影响"
+    },
+    {
+      "id": "chunk:b86b20f510d51ca4",
+      "type": "chunk",
+      "name": ". 3. 5 温度对晶体管特性及参数的影响",
+      "chunk_id": "b86b20f510d51ca4",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 55,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:56",
+      "type": "page",
+      "name": "第 56 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 56
+    },
+    {
+      "id": "chunk:19a30d4430e4fabb",
+      "type": "chunk",
+      "name": ". 3. 5 温度对晶体管特性及参数的影响",
+      "chunk_id": "19a30d4430e4fabb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 56,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:57",
+      "type": "page",
+      "name": "第 57 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 57
+    },
+    {
+      "id": "chunk:878058a4a049078e",
+      "type": "chunk",
+      "name": ". 3. 6 光电三极管",
+      "chunk_id": "878058a4a049078e",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 57,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:a2bb99699f655221",
+      "type": "concept",
+      "name": ". 3. 6 光电三极管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:58",
+      "type": "page",
+      "name": "第 58 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 58
+    },
+    {
+      "id": "chunk:fd31b736074c2c7b",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "fd31b736074c2c7b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 58,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:617d9e45fded3587",
+      "type": "concept",
+      "name": ". 4. 1 结型场效应管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:59",
+      "type": "page",
+      "name": "第 59 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 59
+    },
+    {
+      "id": "chunk:58618ac001700a62",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "58618ac001700a62",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 59,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:60",
+      "type": "page",
+      "name": "第 60 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 60
+    },
+    {
+      "id": "chunk:5f5443046d2747f9",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "5f5443046d2747f9",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 60,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:61",
+      "type": "page",
+      "name": "第 61 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 61
+    },
+    {
+      "id": "chunk:dbf1a8e5612ac18f",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "dbf1a8e5612ac18f",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 61,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:d016ab5db2f34edb",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "d016ab5db2f34edb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 61,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:62",
+      "type": "page",
+      "name": "第 62 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 62
+    },
+    {
+      "id": "chunk:4d215c5a6f1d6c9b",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "4d215c5a6f1d6c9b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 62,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:06b1b444d47d1e5e",
+      "type": "chunk",
+      "name": ". 4. 1 结型场效应管",
+      "chunk_id": "06b1b444d47d1e5e",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 62,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:63",
+      "type": "page",
+      "name": "第 63 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 63
+    },
+    {
+      "id": "chunk:2e00072d33326a6b",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "2e00072d33326a6b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 63,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:6b2da9e51fd73e84",
+      "type": "concept",
+      "name": ". 4. 2 绝缘栅型场效应管"
+    },
+    {
+      "id": "chunk:bcaabe60742fa688",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "bcaabe60742fa688",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 63,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:64",
+      "type": "page",
+      "name": "第 64 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 64
+    },
+    {
+      "id": "chunk:a7da8146da8fda32",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "a7da8146da8fda32",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 64,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:65",
+      "type": "page",
+      "name": "第 65 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 65
+    },
+    {
+      "id": "chunk:623ffa6feeb0a379",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "623ffa6feeb0a379",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 65,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:66",
+      "type": "page",
+      "name": "第 66 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 66
+    },
+    {
+      "id": "chunk:63e355d0256db044",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "63e355d0256db044",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 66,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:67",
+      "type": "page",
+      "name": "第 67 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 67
+    },
+    {
+      "id": "chunk:0f1fd1e5b041a577",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "0f1fd1e5b041a577",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 67,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:68",
+      "type": "page",
+      "name": "第 68 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 68
+    },
+    {
+      "id": "chunk:88b0f8d97d596501",
+      "type": "chunk",
+      "name": ". 4. 2 绝缘栅型场效应管",
+      "chunk_id": "88b0f8d97d596501",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 68,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:69",
+      "type": "page",
+      "name": "第 69 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 69
+    },
+    {
+      "id": "chunk:aa8143d09ba8db69",
+      "type": "chunk",
+      "name": ". 4. 3 场效应管的主要参数",
+      "chunk_id": "aa8143d09ba8db69",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 69,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:e520818a777ed0ba",
+      "type": "concept",
+      "name": ". 4. 3 场效应管的主要参数"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:70",
+      "type": "page",
+      "name": "第 70 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 70
+    },
+    {
+      "id": "chunk:0ddf67b0ce25e10a",
+      "type": "chunk",
+      "name": ". 4. 3 场效应管的主要参数",
+      "chunk_id": "0ddf67b0ce25e10a",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 70,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:71",
+      "type": "page",
+      "name": "第 71 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 71
+    },
+    {
+      "id": "chunk:eeeccfe6c5a7b2cc",
+      "type": "chunk",
+      "name": ". 4. 4 场效应管与晶体管的比较",
+      "chunk_id": "eeeccfe6c5a7b2cc",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 71,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:91a91c1eebb9a210",
+      "type": "concept",
+      "name": ". 4. 4 场效应管与晶体管的比较"
+    },
+    {
+      "id": "chunk:895c2c575b534287",
+      "type": "chunk",
+      "name": ". 4. 4 场效应管与晶体管的比较",
+      "chunk_id": "895c2c575b534287",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 71,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:72",
+      "type": "page",
+      "name": "第 72 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 72
+    },
+    {
+      "id": "chunk:b0a03b65980cbd21",
+      "type": "chunk",
+      "name": ". 5. 1 单结晶体管",
+      "chunk_id": "b0a03b65980cbd21",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 72,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:ebcbe9d360f4b9e0",
+      "type": "concept",
+      "name": ". 5. 1 单结晶体管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:73",
+      "type": "page",
+      "name": "第 73 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 73
+    },
+    {
+      "id": "chunk:d4dbb8a233514f21",
+      "type": "chunk",
+      "name": ". 5. 1 单结晶体管",
+      "chunk_id": "d4dbb8a233514f21",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 73,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:74",
+      "type": "page",
+      "name": "第 74 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 74
+    },
+    {
+      "id": "chunk:bf8ef4e994f59b29",
+      "type": "chunk",
+      "name": ". 5. 1 单结晶体管",
+      "chunk_id": "bf8ef4e994f59b29",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 74,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:75",
+      "type": "page",
+      "name": "第 75 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 75
+    },
+    {
+      "id": "chunk:a414cd52917f7159",
+      "type": "chunk",
+      "name": ". 5. 2 晶闸管",
+      "chunk_id": "a414cd52917f7159",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 75,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:04e312dd5093fe8d",
+      "type": "concept",
+      "name": ". 5. 2 晶闸管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:76",
+      "type": "page",
+      "name": "第 76 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 76
+    },
+    {
+      "id": "chunk:9a22a1abb2784c6b",
+      "type": "chunk",
+      "name": ". 5. 2 晶闸管",
+      "chunk_id": "9a22a1abb2784c6b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 76,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:77",
+      "type": "page",
+      "name": "第 77 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 77
+    },
+    {
+      "id": "chunk:544a79790495045b",
+      "type": "chunk",
+      "name": ". 5. 2 晶闸管",
+      "chunk_id": "544a79790495045b",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 77,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:78",
+      "type": "page",
+      "name": "第 78 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 78
+    },
+    {
+      "id": "chunk:58da733ba12e6adb",
+      "type": "chunk",
+      "name": ". 5. 2 晶闸管",
+      "chunk_id": "58da733ba12e6adb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 78,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:79",
+      "type": "page",
+      "name": "第 79 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 79
+    },
+    {
+      "id": "chunk:cecb6d24054025be",
+      "type": "chunk",
+      "name": ". 6 集成电路中的元件",
+      "chunk_id": "cecb6d24054025be",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 79,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:7d78f0a14a069793",
+      "type": "concept",
+      "name": ". 6 集成电路中的元件"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:80",
+      "type": "page",
+      "name": "第 80 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 80
+    },
+    {
+      "id": "chunk:4c9e00ba3b95d385",
+      "type": "chunk",
+      "name": ". 6. 1 集成电路制造工艺简介",
+      "chunk_id": "4c9e00ba3b95d385",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 80,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:aea63d234049fdcc",
+      "type": "concept",
+      "name": ". 6. 1 集成电路制造工艺简介"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:81",
+      "type": "page",
+      "name": "第 81 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 81
+    },
+    {
+      "id": "chunk:3058b3db2caf9beb",
+      "type": "chunk",
+      "name": ". 6. 1 集成电路制造工艺简介",
+      "chunk_id": "3058b3db2caf9beb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 81,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:82",
+      "type": "page",
+      "name": "第 82 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 82
+    },
+    {
+      "id": "chunk:51f6ffaab6ffd394",
+      "type": "chunk",
+      "name": ". 6. 1 集成电路制造工艺简介",
+      "chunk_id": "51f6ffaab6ffd394",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 82,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:74ccca6af1422e49",
+      "type": "chunk",
+      "name": ". 6. 1 集成电路制造工艺简介",
+      "chunk_id": "74ccca6af1422e49",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 82,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:83",
+      "type": "page",
+      "name": "第 83 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 83
+    },
+    {
+      "id": "chunk:56eb216b6de33246",
+      "type": "chunk",
+      "name": ". 6. 2 集成双极型管",
+      "chunk_id": "56eb216b6de33246",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 83,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:d7a18efb3a91e339",
+      "type": "concept",
+      "name": ". 6. 2 集成双极型管"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:84",
+      "type": "page",
+      "name": "第 84 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 84
+    },
+    {
+      "id": "chunk:eb101dc8a023fbfe",
+      "type": "chunk",
+      "name": ". 6. 2 集成双极型管",
+      "chunk_id": "eb101dc8a023fbfe",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 84,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:85",
+      "type": "page",
+      "name": "第 85 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 85
+    },
+    {
+      "id": "chunk:3ec21fe0685094cb",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "3ec21fe0685094cb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 85,
+      "element_type": "text"
+    },
+    {
+      "id": "concept:939fae3799a628ad",
+      "type": "concept",
+      "name": ". 6. 4 集成电路中元件的特点"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:86",
+      "type": "page",
+      "name": "第 86 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 86
+    },
+    {
+      "id": "chunk:3c23059c1a9d9d76",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "3c23059c1a9d9d76",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 86,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:896cbf3f259d4a83",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "896cbf3f259d4a83",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 86,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:87",
+      "type": "page",
+      "name": "第 87 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 87
+    },
+    {
+      "id": "chunk:3b4858463bc9c04c",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "3b4858463bc9c04c",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 87,
+      "element_type": "text"
+    },
+    {
+      "id": "chunk:dc7642f7a36190bb",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "dc7642f7a36190bb",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 87,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:88",
+      "type": "page",
+      "name": "第 88 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 88
+    },
+    {
+      "id": "chunk:6f9bd53bcf6acc0a",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "6f9bd53bcf6acc0a",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 88,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:89",
+      "type": "page",
+      "name": "第 89 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 89
+    },
+    {
+      "id": "chunk:7d6afdd82cedb8ee",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "7d6afdd82cedb8ee",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 89,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:90",
+      "type": "page",
+      "name": "第 90 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 90
+    },
+    {
+      "id": "chunk:5d2c5931ddb7ea89",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "5d2c5931ddb7ea89",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 90,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:91",
+      "type": "page",
+      "name": "第 91 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 91
+    },
+    {
+      "id": "chunk:e35a82d18a0e3bad",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "e35a82d18a0e3bad",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 91,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:92",
+      "type": "page",
+      "name": "第 92 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 92
+    },
+    {
+      "id": "chunk:15223f5a75c3ae2a",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "15223f5a75c3ae2a",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 92,
+      "element_type": "text"
+    },
+    {
+      "id": "page:document:35d717178c8f5773:93",
+      "type": "page",
+      "name": "第 93 页",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 93
+    },
+    {
+      "id": "chunk:7977185e5fbddb60",
+      "type": "chunk",
+      "name": ". 6. 4 集成电路中元件的特点",
+      "chunk_id": "7977185e5fbddb60",
+      "source": "模拟电子技术基础-童诗白.pdf",
+      "page": 93,
+      "element_type": "text"
+    }
+  ],
+  "edges": [
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:25"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:25",
+      "type": "HAS_CHUNK",
+      "target": "chunk:857415ab0d6358de"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:18b3f9819569ecd7"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:6f7c790a79eebddb"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "chunk:857415ab0d6358de",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:26"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:26",
+      "type": "HAS_CHUNK",
+      "target": "chunk:695b26e010c0733b"
+    },
+    {
+      "source": "chunk:695b26e010c0733b",
+      "type": "MENTIONS",
+      "target": "concept:18b3f9819569ecd7"
+    },
+    {
+      "source": "chunk:695b26e010c0733b",
+      "type": "MENTIONS",
+      "target": "concept:6f7c790a79eebddb"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:27"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:27",
+      "type": "HAS_CHUNK",
+      "target": "chunk:c813cb30623731ac"
+    },
+    {
+      "source": "chunk:c813cb30623731ac",
+      "type": "MENTIONS",
+      "target": "concept:b850b88f23c47558"
+    },
+    {
+      "source": "chunk:c813cb30623731ac",
+      "type": "MENTIONS",
+      "target": "concept:6f7c790a79eebddb"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:27",
+      "type": "HAS_CHUNK",
+      "target": "chunk:98ae65058235bc71"
+    },
+    {
+      "source": "chunk:98ae65058235bc71",
+      "type": "MENTIONS",
+      "target": "concept:b850b88f23c47558"
+    },
+    {
+      "source": "chunk:98ae65058235bc71",
+      "type": "MENTIONS",
+      "target": "concept:6f7c790a79eebddb"
+    },
+    {
+      "source": "chunk:98ae65058235bc71",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:98ae65058235bc71",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:28"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:28",
+      "type": "HAS_CHUNK",
+      "target": "chunk:d5bb2eb358850c80"
+    },
+    {
+      "source": "chunk:d5bb2eb358850c80",
+      "type": "MENTIONS",
+      "target": "concept:b850b88f23c47558"
+    },
+    {
+      "source": "chunk:d5bb2eb358850c80",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:d5bb2eb358850c80",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:29"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:29",
+      "type": "HAS_CHUNK",
+      "target": "chunk:fd716875c8dbfb56"
+    },
+    {
+      "source": "chunk:fd716875c8dbfb56",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:fd716875c8dbfb56",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:fd716875c8dbfb56",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:fd716875c8dbfb56",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:fd716875c8dbfb56",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:30"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:30",
+      "type": "HAS_CHUNK",
+      "target": "chunk:fc4af2b763a80a88"
+    },
+    {
+      "source": "chunk:fc4af2b763a80a88",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:fc4af2b763a80a88",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:fc4af2b763a80a88",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:31"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:31",
+      "type": "HAS_CHUNK",
+      "target": "chunk:edbb4532778c0ef6"
+    },
+    {
+      "source": "chunk:edbb4532778c0ef6",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:edbb4532778c0ef6",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:32"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:32",
+      "type": "HAS_CHUNK",
+      "target": "chunk:85c39b5c0dfc4c97"
+    },
+    {
+      "source": "chunk:85c39b5c0dfc4c97",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:85c39b5c0dfc4c97",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:33"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:33",
+      "type": "HAS_CHUNK",
+      "target": "chunk:5949d325452b16e6"
+    },
+    {
+      "source": "chunk:5949d325452b16e6",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:5949d325452b16e6",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:34"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:34",
+      "type": "HAS_CHUNK",
+      "target": "chunk:0edf8502272ab28e"
+    },
+    {
+      "source": "chunk:0edf8502272ab28e",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:0edf8502272ab28e",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:34",
+      "type": "HAS_CHUNK",
+      "target": "chunk:58113dd65524124f"
+    },
+    {
+      "source": "chunk:58113dd65524124f",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:58113dd65524124f",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:58113dd65524124f",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:35"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:35",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a1e8d58eb0f80924"
+    },
+    {
+      "source": "chunk:a1e8d58eb0f80924",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:a1e8d58eb0f80924",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:a1e8d58eb0f80924",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:a1e8d58eb0f80924",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "chunk:a1e8d58eb0f80924",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:35",
+      "type": "HAS_CHUNK",
+      "target": "chunk:b1c9f9b05e2e1e73"
+    },
+    {
+      "source": "chunk:b1c9f9b05e2e1e73",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:b1c9f9b05e2e1e73",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:b1c9f9b05e2e1e73",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:36"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:36",
+      "type": "HAS_CHUNK",
+      "target": "chunk:215d76bbe0a25e3b"
+    },
+    {
+      "source": "chunk:215d76bbe0a25e3b",
+      "type": "MENTIONS",
+      "target": "concept:aa4bb067c07763bb"
+    },
+    {
+      "source": "chunk:215d76bbe0a25e3b",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:37"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:37",
+      "type": "HAS_CHUNK",
+      "target": "chunk:36e85b79e034b6cb"
+    },
+    {
+      "source": "chunk:36e85b79e034b6cb",
+      "type": "MENTIONS",
+      "target": "concept:e319645b291ccd2a"
+    },
+    {
+      "source": "chunk:36e85b79e034b6cb",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:36e85b79e034b6cb",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:38"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:38",
+      "type": "HAS_CHUNK",
+      "target": "chunk:43fa8dc4415ab3dd"
+    },
+    {
+      "source": "chunk:43fa8dc4415ab3dd",
+      "type": "MENTIONS",
+      "target": "concept:549557674b6dd0c0"
+    },
+    {
+      "source": "chunk:43fa8dc4415ab3dd",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:43fa8dc4415ab3dd",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:43fa8dc4415ab3dd",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "chunk:43fa8dc4415ab3dd",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:39"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:39",
+      "type": "HAS_CHUNK",
+      "target": "chunk:d15745f16d4a6065"
+    },
+    {
+      "source": "chunk:d15745f16d4a6065",
+      "type": "MENTIONS",
+      "target": "concept:32dba9c6a873afdd"
+    },
+    {
+      "source": "chunk:d15745f16d4a6065",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:d15745f16d4a6065",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:d15745f16d4a6065",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "chunk:d15745f16d4a6065",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "chunk:d15745f16d4a6065",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:39",
+      "type": "HAS_CHUNK",
+      "target": "chunk:e0aba41afba992da"
+    },
+    {
+      "source": "chunk:e0aba41afba992da",
+      "type": "MENTIONS",
+      "target": "concept:32dba9c6a873afdd"
+    },
+    {
+      "source": "chunk:e0aba41afba992da",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:e0aba41afba992da",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:40"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:40",
+      "type": "HAS_CHUNK",
+      "target": "chunk:738da4ea3ffd628a"
+    },
+    {
+      "source": "chunk:738da4ea3ffd628a",
+      "type": "MENTIONS",
+      "target": "concept:32dba9c6a873afdd"
+    },
+    {
+      "source": "chunk:738da4ea3ffd628a",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:738da4ea3ffd628a",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:41"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:41",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a942b4931b187e48"
+    },
+    {
+      "source": "chunk:a942b4931b187e48",
+      "type": "MENTIONS",
+      "target": "concept:32dba9c6a873afdd"
+    },
+    {
+      "source": "chunk:a942b4931b187e48",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:42"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:42",
+      "type": "HAS_CHUNK",
+      "target": "chunk:83448af3e1861332"
+    },
+    {
+      "source": "chunk:83448af3e1861332",
+      "type": "MENTIONS",
+      "target": "concept:7edb4915d762e022"
+    },
+    {
+      "source": "chunk:83448af3e1861332",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:83448af3e1861332",
+      "type": "MENTIONS",
+      "target": "concept:e55eeeed26aee23e"
+    },
+    {
+      "source": "chunk:83448af3e1861332",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "chunk:83448af3e1861332",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:43"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:43",
+      "type": "HAS_CHUNK",
+      "target": "chunk:702a036e4b92c3ed"
+    },
+    {
+      "source": "chunk:702a036e4b92c3ed",
+      "type": "MENTIONS",
+      "target": "concept:7edb4915d762e022"
+    },
+    {
+      "source": "chunk:702a036e4b92c3ed",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:44"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:44",
+      "type": "HAS_CHUNK",
+      "target": "chunk:5575eac4dc7900fc"
+    },
+    {
+      "source": "chunk:5575eac4dc7900fc",
+      "type": "MENTIONS",
+      "target": "concept:37a418bac7e7e0d6"
+    },
+    {
+      "source": "chunk:5575eac4dc7900fc",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:5575eac4dc7900fc",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "chunk:5575eac4dc7900fc",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:45"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:45",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a944edcae8b68940"
+    },
+    {
+      "source": "chunk:a944edcae8b68940",
+      "type": "MENTIONS",
+      "target": "concept:37a418bac7e7e0d6"
+    },
+    {
+      "source": "chunk:a944edcae8b68940",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:a944edcae8b68940",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:a944edcae8b68940",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "chunk:a944edcae8b68940",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:46"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:46",
+      "type": "HAS_CHUNK",
+      "target": "chunk:9120fda4984bd253"
+    },
+    {
+      "source": "chunk:9120fda4984bd253",
+      "type": "MENTIONS",
+      "target": "concept:37a418bac7e7e0d6"
+    },
+    {
+      "source": "chunk:9120fda4984bd253",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:9120fda4984bd253",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:46",
+      "type": "HAS_CHUNK",
+      "target": "chunk:61591ef122557d65"
+    },
+    {
+      "source": "chunk:61591ef122557d65",
+      "type": "MENTIONS",
+      "target": "concept:37a418bac7e7e0d6"
+    },
+    {
+      "source": "chunk:61591ef122557d65",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:47"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:47",
+      "type": "HAS_CHUNK",
+      "target": "chunk:9c034b75f51601ea"
+    },
+    {
+      "source": "chunk:9c034b75f51601ea",
+      "type": "MENTIONS",
+      "target": "concept:fe98237934c33701"
+    },
+    {
+      "source": "chunk:9c034b75f51601ea",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:9c034b75f51601ea",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:48"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:48",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a5dc50d7004b9bc7"
+    },
+    {
+      "source": "chunk:a5dc50d7004b9bc7",
+      "type": "MENTIONS",
+      "target": "concept:fe98237934c33701"
+    },
+    {
+      "source": "chunk:a5dc50d7004b9bc7",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:49"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:49",
+      "type": "HAS_CHUNK",
+      "target": "chunk:7dc496507db9f24e"
+    },
+    {
+      "source": "chunk:7dc496507db9f24e",
+      "type": "MENTIONS",
+      "target": "concept:fe98237934c33701"
+    },
+    {
+      "source": "chunk:7dc496507db9f24e",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:50"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:50",
+      "type": "HAS_CHUNK",
+      "target": "chunk:83966476d7c39408"
+    },
+    {
+      "source": "chunk:83966476d7c39408",
+      "type": "MENTIONS",
+      "target": "concept:fe98237934c33701"
+    },
+    {
+      "source": "chunk:83966476d7c39408",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:51"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:51",
+      "type": "HAS_CHUNK",
+      "target": "chunk:2b9c5e7553d43c05"
+    },
+    {
+      "source": "chunk:2b9c5e7553d43c05",
+      "type": "MENTIONS",
+      "target": "concept:930199cb8451b206"
+    },
+    {
+      "source": "chunk:2b9c5e7553d43c05",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:2b9c5e7553d43c05",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:2b9c5e7553d43c05",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:52"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:52",
+      "type": "HAS_CHUNK",
+      "target": "chunk:96299a047dbe9b35"
+    },
+    {
+      "source": "chunk:96299a047dbe9b35",
+      "type": "MENTIONS",
+      "target": "concept:930199cb8451b206"
+    },
+    {
+      "source": "chunk:96299a047dbe9b35",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:52",
+      "type": "HAS_CHUNK",
+      "target": "chunk:731943f8087b6554"
+    },
+    {
+      "source": "chunk:731943f8087b6554",
+      "type": "MENTIONS",
+      "target": "concept:930199cb8451b206"
+    },
+    {
+      "source": "chunk:731943f8087b6554",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:53"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:53",
+      "type": "HAS_CHUNK",
+      "target": "chunk:618e4bee6485d9a0"
+    },
+    {
+      "source": "chunk:618e4bee6485d9a0",
+      "type": "MENTIONS",
+      "target": "concept:ca4942b2db7d88ff"
+    },
+    {
+      "source": "chunk:618e4bee6485d9a0",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:618e4bee6485d9a0",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:54"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:54",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a4fac2baf6e3b653"
+    },
+    {
+      "source": "chunk:a4fac2baf6e3b653",
+      "type": "MENTIONS",
+      "target": "concept:ca4942b2db7d88ff"
+    },
+    {
+      "source": "chunk:a4fac2baf6e3b653",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:a4fac2baf6e3b653",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:55"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:55",
+      "type": "HAS_CHUNK",
+      "target": "chunk:1f6deebc93b89f51"
+    },
+    {
+      "source": "chunk:1f6deebc93b89f51",
+      "type": "MENTIONS",
+      "target": "concept:79f8e43ea7af452d"
+    },
+    {
+      "source": "chunk:1f6deebc93b89f51",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:1f6deebc93b89f51",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:55",
+      "type": "HAS_CHUNK",
+      "target": "chunk:b86b20f510d51ca4"
+    },
+    {
+      "source": "chunk:b86b20f510d51ca4",
+      "type": "MENTIONS",
+      "target": "concept:79f8e43ea7af452d"
+    },
+    {
+      "source": "chunk:b86b20f510d51ca4",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:b86b20f510d51ca4",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:56"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:56",
+      "type": "HAS_CHUNK",
+      "target": "chunk:19a30d4430e4fabb"
+    },
+    {
+      "source": "chunk:19a30d4430e4fabb",
+      "type": "MENTIONS",
+      "target": "concept:79f8e43ea7af452d"
+    },
+    {
+      "source": "chunk:19a30d4430e4fabb",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:57"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:57",
+      "type": "HAS_CHUNK",
+      "target": "chunk:878058a4a049078e"
+    },
+    {
+      "source": "chunk:878058a4a049078e",
+      "type": "MENTIONS",
+      "target": "concept:a2bb99699f655221"
+    },
+    {
+      "source": "chunk:878058a4a049078e",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:878058a4a049078e",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:58"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:58",
+      "type": "HAS_CHUNK",
+      "target": "chunk:fd31b736074c2c7b"
+    },
+    {
+      "source": "chunk:fd31b736074c2c7b",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "chunk:fd31b736074c2c7b",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:fd31b736074c2c7b",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:fd31b736074c2c7b",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:fd31b736074c2c7b",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "chunk:fd31b736074c2c7b",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:59"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:59",
+      "type": "HAS_CHUNK",
+      "target": "chunk:58618ac001700a62"
+    },
+    {
+      "source": "chunk:58618ac001700a62",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "chunk:58618ac001700a62",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:60"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:60",
+      "type": "HAS_CHUNK",
+      "target": "chunk:5f5443046d2747f9"
+    },
+    {
+      "source": "chunk:5f5443046d2747f9",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:61"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:61",
+      "type": "HAS_CHUNK",
+      "target": "chunk:dbf1a8e5612ac18f"
+    },
+    {
+      "source": "chunk:dbf1a8e5612ac18f",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "chunk:dbf1a8e5612ac18f",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:dbf1a8e5612ac18f",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:61",
+      "type": "HAS_CHUNK",
+      "target": "chunk:d016ab5db2f34edb"
+    },
+    {
+      "source": "chunk:d016ab5db2f34edb",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "chunk:d016ab5db2f34edb",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:62"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:62",
+      "type": "HAS_CHUNK",
+      "target": "chunk:4d215c5a6f1d6c9b"
+    },
+    {
+      "source": "chunk:4d215c5a6f1d6c9b",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "chunk:4d215c5a6f1d6c9b",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:62",
+      "type": "HAS_CHUNK",
+      "target": "chunk:06b1b444d47d1e5e"
+    },
+    {
+      "source": "chunk:06b1b444d47d1e5e",
+      "type": "MENTIONS",
+      "target": "concept:617d9e45fded3587"
+    },
+    {
+      "source": "chunk:06b1b444d47d1e5e",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:63"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:63",
+      "type": "HAS_CHUNK",
+      "target": "chunk:2e00072d33326a6b"
+    },
+    {
+      "source": "chunk:2e00072d33326a6b",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:2e00072d33326a6b",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:63",
+      "type": "HAS_CHUNK",
+      "target": "chunk:bcaabe60742fa688"
+    },
+    {
+      "source": "chunk:bcaabe60742fa688",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:bcaabe60742fa688",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:bcaabe60742fa688",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:64"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:64",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a7da8146da8fda32"
+    },
+    {
+      "source": "chunk:a7da8146da8fda32",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:a7da8146da8fda32",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:65"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:65",
+      "type": "HAS_CHUNK",
+      "target": "chunk:623ffa6feeb0a379"
+    },
+    {
+      "source": "chunk:623ffa6feeb0a379",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:623ffa6feeb0a379",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:66"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:66",
+      "type": "HAS_CHUNK",
+      "target": "chunk:63e355d0256db044"
+    },
+    {
+      "source": "chunk:63e355d0256db044",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:63e355d0256db044",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:67"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:67",
+      "type": "HAS_CHUNK",
+      "target": "chunk:0f1fd1e5b041a577"
+    },
+    {
+      "source": "chunk:0f1fd1e5b041a577",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:0f1fd1e5b041a577",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:68"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:68",
+      "type": "HAS_CHUNK",
+      "target": "chunk:88b0f8d97d596501"
+    },
+    {
+      "source": "chunk:88b0f8d97d596501",
+      "type": "MENTIONS",
+      "target": "concept:6b2da9e51fd73e84"
+    },
+    {
+      "source": "chunk:88b0f8d97d596501",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:88b0f8d97d596501",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:69"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:69",
+      "type": "HAS_CHUNK",
+      "target": "chunk:aa8143d09ba8db69"
+    },
+    {
+      "source": "chunk:aa8143d09ba8db69",
+      "type": "MENTIONS",
+      "target": "concept:e520818a777ed0ba"
+    },
+    {
+      "source": "chunk:aa8143d09ba8db69",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:70"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:70",
+      "type": "HAS_CHUNK",
+      "target": "chunk:0ddf67b0ce25e10a"
+    },
+    {
+      "source": "chunk:0ddf67b0ce25e10a",
+      "type": "MENTIONS",
+      "target": "concept:e520818a777ed0ba"
+    },
+    {
+      "source": "chunk:0ddf67b0ce25e10a",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:0ddf67b0ce25e10a",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "chunk:0ddf67b0ce25e10a",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:71"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:71",
+      "type": "HAS_CHUNK",
+      "target": "chunk:eeeccfe6c5a7b2cc"
+    },
+    {
+      "source": "chunk:eeeccfe6c5a7b2cc",
+      "type": "MENTIONS",
+      "target": "concept:91a91c1eebb9a210"
+    },
+    {
+      "source": "chunk:eeeccfe6c5a7b2cc",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:eeeccfe6c5a7b2cc",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:71",
+      "type": "HAS_CHUNK",
+      "target": "chunk:895c2c575b534287"
+    },
+    {
+      "source": "chunk:895c2c575b534287",
+      "type": "MENTIONS",
+      "target": "concept:91a91c1eebb9a210"
+    },
+    {
+      "source": "chunk:895c2c575b534287",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:895c2c575b534287",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:72"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:72",
+      "type": "HAS_CHUNK",
+      "target": "chunk:b0a03b65980cbd21"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:ebcbe9d360f4b9e0"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:b0a03b65980cbd21",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:73"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:73",
+      "type": "HAS_CHUNK",
+      "target": "chunk:d4dbb8a233514f21"
+    },
+    {
+      "source": "chunk:d4dbb8a233514f21",
+      "type": "MENTIONS",
+      "target": "concept:ebcbe9d360f4b9e0"
+    },
+    {
+      "source": "chunk:d4dbb8a233514f21",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:d4dbb8a233514f21",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:d4dbb8a233514f21",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:74"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:74",
+      "type": "HAS_CHUNK",
+      "target": "chunk:bf8ef4e994f59b29"
+    },
+    {
+      "source": "chunk:bf8ef4e994f59b29",
+      "type": "MENTIONS",
+      "target": "concept:ebcbe9d360f4b9e0"
+    },
+    {
+      "source": "chunk:bf8ef4e994f59b29",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:bf8ef4e994f59b29",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:bf8ef4e994f59b29",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:bf8ef4e994f59b29",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:75"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:75",
+      "type": "HAS_CHUNK",
+      "target": "chunk:a414cd52917f7159"
+    },
+    {
+      "source": "chunk:a414cd52917f7159",
+      "type": "MENTIONS",
+      "target": "concept:04e312dd5093fe8d"
+    },
+    {
+      "source": "chunk:a414cd52917f7159",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:a414cd52917f7159",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:76"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:76",
+      "type": "HAS_CHUNK",
+      "target": "chunk:9a22a1abb2784c6b"
+    },
+    {
+      "source": "chunk:9a22a1abb2784c6b",
+      "type": "MENTIONS",
+      "target": "concept:04e312dd5093fe8d"
+    },
+    {
+      "source": "chunk:9a22a1abb2784c6b",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:9a22a1abb2784c6b",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:9a22a1abb2784c6b",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:9a22a1abb2784c6b",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:77"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:77",
+      "type": "HAS_CHUNK",
+      "target": "chunk:544a79790495045b"
+    },
+    {
+      "source": "chunk:544a79790495045b",
+      "type": "MENTIONS",
+      "target": "concept:04e312dd5093fe8d"
+    },
+    {
+      "source": "chunk:544a79790495045b",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:544a79790495045b",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:544a79790495045b",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:78"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:78",
+      "type": "HAS_CHUNK",
+      "target": "chunk:58da733ba12e6adb"
+    },
+    {
+      "source": "chunk:58da733ba12e6adb",
+      "type": "MENTIONS",
+      "target": "concept:04e312dd5093fe8d"
+    },
+    {
+      "source": "chunk:58da733ba12e6adb",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:79"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:79",
+      "type": "HAS_CHUNK",
+      "target": "chunk:cecb6d24054025be"
+    },
+    {
+      "source": "chunk:cecb6d24054025be",
+      "type": "MENTIONS",
+      "target": "concept:7d78f0a14a069793"
+    },
+    {
+      "source": "chunk:cecb6d24054025be",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:cecb6d24054025be",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:cecb6d24054025be",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:80"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:80",
+      "type": "HAS_CHUNK",
+      "target": "chunk:4c9e00ba3b95d385"
+    },
+    {
+      "source": "chunk:4c9e00ba3b95d385",
+      "type": "MENTIONS",
+      "target": "concept:aea63d234049fdcc"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:81"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:81",
+      "type": "HAS_CHUNK",
+      "target": "chunk:3058b3db2caf9beb"
+    },
+    {
+      "source": "chunk:3058b3db2caf9beb",
+      "type": "MENTIONS",
+      "target": "concept:aea63d234049fdcc"
+    },
+    {
+      "source": "chunk:3058b3db2caf9beb",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:3058b3db2caf9beb",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:3058b3db2caf9beb",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:82"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:82",
+      "type": "HAS_CHUNK",
+      "target": "chunk:51f6ffaab6ffd394"
+    },
+    {
+      "source": "chunk:51f6ffaab6ffd394",
+      "type": "MENTIONS",
+      "target": "concept:aea63d234049fdcc"
+    },
+    {
+      "source": "chunk:51f6ffaab6ffd394",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:82",
+      "type": "HAS_CHUNK",
+      "target": "chunk:74ccca6af1422e49"
+    },
+    {
+      "source": "chunk:74ccca6af1422e49",
+      "type": "MENTIONS",
+      "target": "concept:aea63d234049fdcc"
+    },
+    {
+      "source": "chunk:74ccca6af1422e49",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:74ccca6af1422e49",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:74ccca6af1422e49",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:74ccca6af1422e49",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:83"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:83",
+      "type": "HAS_CHUNK",
+      "target": "chunk:56eb216b6de33246"
+    },
+    {
+      "source": "chunk:56eb216b6de33246",
+      "type": "MENTIONS",
+      "target": "concept:d7a18efb3a91e339"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:84"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:84",
+      "type": "HAS_CHUNK",
+      "target": "chunk:eb101dc8a023fbfe"
+    },
+    {
+      "source": "chunk:eb101dc8a023fbfe",
+      "type": "MENTIONS",
+      "target": "concept:d7a18efb3a91e339"
+    },
+    {
+      "source": "chunk:eb101dc8a023fbfe",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:85"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:85",
+      "type": "HAS_CHUNK",
+      "target": "chunk:3ec21fe0685094cb"
+    },
+    {
+      "source": "chunk:3ec21fe0685094cb",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:3ec21fe0685094cb",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:3ec21fe0685094cb",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:3ec21fe0685094cb",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:86"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:86",
+      "type": "HAS_CHUNK",
+      "target": "chunk:3c23059c1a9d9d76"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:6f7c790a79eebddb"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:e55eeeed26aee23e"
+    },
+    {
+      "source": "chunk:3c23059c1a9d9d76",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:86",
+      "type": "HAS_CHUNK",
+      "target": "chunk:896cbf3f259d4a83"
+    },
+    {
+      "source": "chunk:896cbf3f259d4a83",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:896cbf3f259d4a83",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:896cbf3f259d4a83",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:87"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:87",
+      "type": "HAS_CHUNK",
+      "target": "chunk:3b4858463bc9c04c"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:b3a3a54a5a3c395e"
+    },
+    {
+      "source": "chunk:3b4858463bc9c04c",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:87",
+      "type": "HAS_CHUNK",
+      "target": "chunk:dc7642f7a36190bb"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "chunk:dc7642f7a36190bb",
+      "type": "MENTIONS",
+      "target": "concept:b909d3368bf041a7"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:88"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:88",
+      "type": "HAS_CHUNK",
+      "target": "chunk:6f9bd53bcf6acc0a"
+    },
+    {
+      "source": "chunk:6f9bd53bcf6acc0a",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:6f9bd53bcf6acc0a",
+      "type": "MENTIONS",
+      "target": "concept:426482de09c45dd2"
+    },
+    {
+      "source": "chunk:6f9bd53bcf6acc0a",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:6f9bd53bcf6acc0a",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:6f9bd53bcf6acc0a",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "chunk:6f9bd53bcf6acc0a",
+      "type": "MENTIONS",
+      "target": "concept:3301ecb870b2ae9e"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:89"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:89",
+      "type": "HAS_CHUNK",
+      "target": "chunk:7d6afdd82cedb8ee"
+    },
+    {
+      "source": "chunk:7d6afdd82cedb8ee",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:7d6afdd82cedb8ee",
+      "type": "MENTIONS",
+      "target": "concept:6f7c790a79eebddb"
+    },
+    {
+      "source": "chunk:7d6afdd82cedb8ee",
+      "type": "MENTIONS",
+      "target": "concept:52c6c93856eeb6e9"
+    },
+    {
+      "source": "chunk:7d6afdd82cedb8ee",
+      "type": "MENTIONS",
+      "target": "concept:c9c275b395be8a18"
+    },
+    {
+      "source": "chunk:7d6afdd82cedb8ee",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:7d6afdd82cedb8ee",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:90"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:90",
+      "type": "HAS_CHUNK",
+      "target": "chunk:5d2c5931ddb7ea89"
+    },
+    {
+      "source": "chunk:5d2c5931ddb7ea89",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:5d2c5931ddb7ea89",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:91"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:91",
+      "type": "HAS_CHUNK",
+      "target": "chunk:e35a82d18a0e3bad"
+    },
+    {
+      "source": "chunk:e35a82d18a0e3bad",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:e35a82d18a0e3bad",
+      "type": "MENTIONS",
+      "target": "concept:5680b57305cd2b63"
+    },
+    {
+      "source": "chunk:e35a82d18a0e3bad",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:92"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:92",
+      "type": "HAS_CHUNK",
+      "target": "chunk:15223f5a75c3ae2a"
+    },
+    {
+      "source": "chunk:15223f5a75c3ae2a",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:15223f5a75c3ae2a",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "document:35d717178c8f5773",
+      "type": "HAS_PAGE",
+      "target": "page:document:35d717178c8f5773:93"
+    },
+    {
+      "source": "page:document:35d717178c8f5773:93",
+      "type": "HAS_CHUNK",
+      "target": "chunk:7977185e5fbddb60"
+    },
+    {
+      "source": "chunk:7977185e5fbddb60",
+      "type": "MENTIONS",
+      "target": "concept:939fae3799a628ad"
+    },
+    {
+      "source": "chunk:7977185e5fbddb60",
+      "type": "MENTIONS",
+      "target": "concept:5bce86f304d60cd4"
+    },
+    {
+      "source": "chunk:7977185e5fbddb60",
+      "type": "MENTIONS",
+      "target": "concept:7a0cd06053f15c73"
+    }
+  ]
+}

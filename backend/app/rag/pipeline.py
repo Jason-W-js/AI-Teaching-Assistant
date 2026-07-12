@@ -16,6 +16,8 @@ from openpyxl import load_workbook
 
 from backend.app.config import settings
 from backend.app.rag.models import PageDocument, TextChunk
+from backend.app.rag.embedding_runtime import encode_texts
+from backend.app.rag.ontology import COURSE_CONCEPTS, extract_course_concepts
 from backend.app.rag.multimodal import (
     BuildModelConfig,
     LayoutElement,
@@ -28,7 +30,9 @@ from backend.app.rag.stores import build_qdrant_indexes, sync_neo4j_graph
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".md", ".txt", ".docx", ".xlsx", ".json"}
+KNOWLEDGE_EXTENSIONS = {".pdf", ".md", ".txt", ".docx"}
+QUESTION_BANK_EXTENSIONS = {".xlsx", ".json"}
+SUPPORTED_EXTENSIONS = KNOWLEDGE_EXTENSIONS | QUESTION_BANK_EXTENSIONS
 AD_NOISE = (
     "扫码关注",
     "微信公众号",
@@ -37,42 +41,7 @@ AD_NOISE = (
     "资源下载",
     "广告",
 )
-TAG_KEYWORDS = (
-    "本征半导体",
-    "N型半导体",
-    "P型半导体",
-    "PN结",
-    "二极管",
-    "稳压二极管",
-    "晶体管",
-    "场效应管",
-    "静态工作点",
-    "伏安特性",
-    "单向导电性",
-    "反向击穿",
-    "欧姆定律",
-    "基尔霍夫定律",
-    "戴维南定理",
-    "诺顿定理",
-    "叠加定理",
-    "节点电压法",
-    "网孔电流法",
-    "KCL",
-    "KVL",
-    "正弦稳态",
-    "相量",
-    "复阻抗",
-    "感抗",
-    "容抗",
-    "RLC",
-    "谐振",
-    "有功功率",
-    "无功功率",
-    "视在功率",
-    "功率因数",
-    "运算放大器",
-    "负反馈",
-)
+TAG_KEYWORDS = COURSE_CONCEPTS
 
 
 def _normalize_line(line: str) -> str:
@@ -157,6 +126,8 @@ def extract_pdf(path: Path, chapter_limit: int | None = None) -> list[PageDocume
     raw_pages = [document[index - 1].get_text("text") for index in range(start_page, end_page + 1)]
     repeated_noise = _edge_noise(raw_pages)
     page_docs: list[PageDocument] = []
+    page_range_match = re.search(r"(?:pages?|页)[_-]?(\d+)[_-](\d+)", path.stem, re.I)
+    source_page_offset = int(page_range_match.group(1)) - 1 if page_range_match else 0
     for page_number, raw_text in zip(range(start_page, end_page + 1), raw_pages):
         current_chapter = ""
         current_section = ""
@@ -186,6 +157,7 @@ def extract_pdf(path: Path, chapter_limit: int | None = None) -> list[PageDocume
                 page=page_number,
                 chapter=current_chapter or path.stem,
                 section=current_section or current_chapter or path.stem,
+                source_page=source_page_offset + page_number,
             )
         )
     document.close()
@@ -347,11 +319,7 @@ def extract_question_json(path: Path) -> list[dict[str, Any]]:
 
 
 def _knowledge_tags(text: str, section: str) -> list[str]:
-    tags = [keyword for keyword in TAG_KEYWORDS if keyword.lower() in text.lower()]
-    normalized_section = re.sub(r"^\d+(?:\.\d+)*\s*", "", section).strip()
-    if normalized_section and normalized_section not in tags:
-        tags.insert(0, normalized_section)
-    return tags[:8]
+    return extract_course_concepts(text, section)[:8]
 
 
 def _sentence_pieces(text: str, max_chars: int = 900) -> list[str]:
@@ -400,8 +368,8 @@ def chunk_documents(documents: Iterable[PageDocument], max_chars: int = 900) -> 
                     source=document.source,
                     chapter=document.chapter,
                     section=document.section,
-                    page_start=document.page,
-                    page_end=document.page,
+                    page_start=document.source_page or document.page,
+                    page_end=document.source_page or document.page,
                     doc_type=document.doc_type,
                     knowledge_tags=_knowledge_tags(text, document.section),
                     element_type=document.element_type,
@@ -466,8 +434,49 @@ def _write_clean_markdown(path: Path, documents: list[PageDocument], output_dir:
         if document.section and document.section != last_section and document.section != document.chapter:
             lines.extend([f"### {document.section}", ""])
             last_section = document.section
-        lines.extend([f"<!-- source={document.source}; page={document.page} -->", document.text, ""])
+        lines.extend([
+            f"<!-- source={document.source}; page={document.source_page or document.page} -->",
+            document.text,
+            "",
+        ])
     (output_dir / f"{path.stem}.clean.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def validate_build_artifacts(
+    chunks: list[TextChunk],
+    embeddings: np.ndarray,
+    graph: dict[str, Any],
+) -> dict[str, Any]:
+    if any(chunk.doc_type == "question" for chunk in chunks):
+        raise RuntimeError("构建校验失败：题库 Chunk 不得进入课程知识库")
+    if embeddings.ndim != 2 or embeddings.shape[0] != len(chunks):
+        raise RuntimeError("构建校验失败：向量数量与 Chunk 数量不一致")
+    node_ids = {
+        str(node.get("id", "")) for node in graph.get("nodes", []) if node.get("id")
+    }
+    dangling = [
+        edge for edge in graph.get("edges", [])
+        if str(edge.get("source", "")) not in node_ids
+        or str(edge.get("target", "")) not in node_ids
+    ]
+    if dangling:
+        raise RuntimeError(f"构建校验失败：知识图谱存在 {len(dangling)} 条悬空关系")
+    invalid_bbox = [
+        chunk.id for chunk in chunks
+        if chunk.bbox is not None and len(chunk.bbox) != 4
+    ]
+    if invalid_bbox:
+        raise RuntimeError(f"构建校验失败：{len(invalid_bbox)} 个多模态元素坐标不完整")
+    return {
+        "status": "passed",
+        "chunks": len(chunks),
+        "vectors": int(embeddings.shape[0]),
+        "vector_dimension": int(embeddings.shape[1]),
+        "graph_nodes": len(node_ids),
+        "graph_edges": len(graph.get("edges", [])),
+        "question_chunks": 0,
+        "dangling_graph_edges": 0,
+    }
 
 
 def build_knowledge_base(
@@ -487,12 +496,22 @@ def build_knowledge_base(
     cleaned_dir.mkdir(parents=True, exist_ok=True)
 
     documents: list[PageDocument] = []
-    questions: list[dict[str, Any]] = []
     elements: list[LayoutElement] = []
     cleaning_audits: list[dict[str, Any]] = []
-    source_files = [
+    candidate_files = [
         path for path in sorted(resources_dir.iterdir())
         if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
+    ]
+    source_files = [
+        path for path in candidate_files if path.suffix.lower() in KNOWLEDGE_EXTENSIONS
+    ]
+    excluded_sources = [
+        {
+            "source": path.name,
+            "reason": "题库文件与课程知识库隔离，不参与分块、向量、图谱或检索",
+        }
+        for path in candidate_files
+        if path.suffix.lower() in QUESTION_BANK_EXTENSIONS
     ]
     for path in source_files:
         suffix = path.suffix.lower()
@@ -518,17 +537,17 @@ def build_knowledge_base(
             extracted = extract_docx(path)
             documents.extend(extracted)
             _write_clean_markdown(path, extracted, cleaned_dir)
-        elif suffix == ".xlsx":
-            questions.extend(extract_question_xlsx(path))
-        elif suffix == ".json":
-            questions.extend(extract_question_json(path))
-
-    structured_questions = {"schema_version": "1.0", "questions": questions}
+    structured_questions = {
+        "schema_version": "2.0",
+        "questions": [],
+        "excluded_sources": excluded_sources,
+        "message": "题库与课程知识库隔离；本文件仅保留兼容占位。",
+    }
     (output_dir / "question_bank.json").write_text(
         json.dumps(structured_questions, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
-    chunks = chunk_documents(documents) + multimodal_chunks(elements) + question_chunks(questions)
+    chunks = chunk_documents(documents) + multimodal_chunks(elements)
     if not chunks:
         raise RuntimeError(f"在 {resources_dir} 中没有提取到可索引内容")
 
@@ -554,11 +573,6 @@ def build_knowledge_base(
         # Establish native-module import order before Torch on Windows.
         import qdrant_client  # noqa: F401
 
-    # Import lazily: loading Torch/OpenMP at API import time is expensive and
-    # can conflict with unrelated native extensions on Windows.
-    from sentence_transformers import SentenceTransformer
-
-    model = SentenceTransformer(str(embedding_model_path), device="cpu")
     embedding_texts = [
         "\n".join(
             filter(
@@ -568,13 +582,13 @@ def build_knowledge_base(
         )
         for chunk in chunks
     ]
-    embeddings = model.encode(
+    embeddings = encode_texts(
+        embedding_model_path,
         embedding_texts,
         batch_size=32,
         show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    ).astype(np.float32)
+    )
+    validation = validate_build_artifacts(chunks, embeddings, graph)
     import faiss
 
     index = faiss.IndexFlatIP(embeddings.shape[1])
@@ -593,13 +607,14 @@ def build_knowledge_base(
 
     metadata = {
         "state": "populated",
-        "schema_version": "2.0-multimodal",
+        "schema_version": "2.1-layered-multimodal",
         "resource_dir": str(resources_dir),
         "embedding_model": str(embedding_model_path),
         "dimension": int(embeddings.shape[1]),
         "documents": len(source_files),
         "text_pages": len(documents),
-        "questions": len(questions),
+        "questions": 0,
+        "excluded_sources": excluded_sources,
         "chunks": len(chunks),
         "layout_elements": len(elements),
         "circuit_diagrams": sum(item.element_type == "circuit" for item in elements),
@@ -609,7 +624,7 @@ def build_knowledge_base(
         "knowledge_graph": {"nodes": len(graph["nodes"]), "edges": len(graph["edges"]), "neo4j": neo4j_status},
         "qdrant": qdrant_status,
         "vision_model": (
-            f"qwen/{settings.qwen_vision_model}"
+            f"qwen/{settings.qwen_circuit_vision_model}"
             if settings.qwen_api_key
             else "not-configured (safe fallback)"
         ),
@@ -620,7 +635,54 @@ def build_knowledge_base(
         ),
         "chapter_limit": chapter_limit,
         "sources": [path.name for path in source_files],
+        "validation": validation,
     }
+    metadata["pipeline_layers"] = {
+        "document_cleaning": {
+            "status": "ready",
+            "pages_reviewed": len(cleaning_audits),
+            "pages_discarded": metadata["discarded_pages"],
+            "partial_characters_removed": sum(
+                int(item.get("removed_characters", 0)) for item in cleaning_audits
+            ),
+            "question_banks_excluded": len(excluded_sources),
+        },
+        "document_parsing": {
+            "status": "ready",
+            "engine": "PDF-Extract-Kit + PyMuPDF fallback",
+            "layout_elements": len(elements),
+            "preserves_page_bbox": True,
+        },
+        "modality_processing": {
+            "status": "ready",
+            "text_chunks": sum(chunk.element_type == "text" for chunk in chunks),
+            "circuit_diagrams": metadata["circuit_diagrams"],
+            "formula_elements": metadata["formula_elements"],
+            "table_elements": metadata["table_elements"],
+            "circuit_vision_model": metadata["vision_model"],
+        },
+        "knowledge_fusion": {
+            "status": "ready",
+            "vector_store": qdrant_status.get("mode", "faiss") if qdrant_status.get("enabled") else "faiss",
+            "vector_points": len(chunks),
+            "graph_nodes": len(graph["nodes"]),
+            "graph_edges": len(graph["edges"]),
+            "graph_store": "neo4j" if neo4j_status.get("enabled") else "local-json",
+        },
+        "retrieval_service": {
+            "status": "ready",
+            "strategies": ["vector", "BM25", "knowledge-graph", "rerank"],
+            "question_bank_search": False,
+        },
+        "application": {
+            "status": "ready",
+            "context_modalities": ["text", "formula", "table", "circuit-description", "netlist", "image"],
+        },
+    }
+    (output_dir / "pipeline_audit.json").write_text(
+        json.dumps(metadata["pipeline_layers"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     (output_dir / "index_meta.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )

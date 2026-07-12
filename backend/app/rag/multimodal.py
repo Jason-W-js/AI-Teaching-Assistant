@@ -8,7 +8,7 @@ import logging
 import math
 import mimetypes
 import re
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterable
 from uuid import NAMESPACE_URL, uuid5
@@ -19,10 +19,26 @@ import httpx
 from backend.app.config import settings
 from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
 from backend.app.rag.models import PageDocument, TextChunk
+from backend.app.rag.ontology import (
+    COMPONENT_CONCEPTS,
+    extract_course_concepts,
+    is_course_concept,
+    meaningful_section,
+)
 from backend.app.services.qwen_multimodal_client import QwenMultimodalAPIError, QwenVisionClient
 
 
 logger = logging.getLogger(__name__)
+
+PARTIAL_NOISE_MARKERS = (
+    "版权所有", "版权", "ISBN", "责任编辑", "封面设计", "版次", "印次", "出版社",
+    "扫码", "公众号", "购买正版", "资源下载", "广告", "网址", "http://", "https://",
+)
+
+
+def _safe_partial_noise_fragment(fragment: str) -> bool:
+    lowered = fragment.lower()
+    return any(marker.lower() in lowered for marker in PARTIAL_NOISE_MARKERS)
 
 
 @dataclass(frozen=True)
@@ -62,6 +78,7 @@ class LayoutElement:
     confidence: float = 0.0
     processor: str = "pymupdf-fallback"
     uncertain: bool = False
+    source_page: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -143,7 +160,14 @@ def _page_cleaning_decisions(
     pages: list[PageDocument], client: CompatibleMultimodalClient | None
 ) -> dict[int, dict[str, Any]]:
     decisions = {
-        page.page: {"page": page.page, "keep": True, "reason": "默认保留课程内容", "method": "rule"}
+        page.page: {
+            "page": page.page,
+            "source_page": page.source_page or page.page,
+            "keep": True,
+            "reason": "默认保留课程内容",
+            "method": "rule",
+            "remove_fragments": [],
+        }
         for page in pages
     }
     if not client or not client.config.enabled:
@@ -156,7 +180,9 @@ def _page_cleaning_decisions(
         result = client.complete_json(
             """你是电路教材清洗器。判断每页是否包含可用于教学问答的正文、例题、公式、表格或电路图。
 仅当整页只是封面、版权/版本说明、空白页、纯广告、与课程无关的序言时才丢弃；目录、章节导读和任何技术内容必须保留。
-返回 JSON：{"decisions":[{"page":1,"keep":true,"reason":"..."}]}，不得改写页码。\n"""
+若页面包含少量与课程无关的版本说明、广告或页眉噪音但同时有技术正文，必须保留页面，
+并在 remove_fragments 中逐字列出需要删除的短片段；不得删除公式、图题、例题或技术段落。
+返回 JSON：{"decisions":[{"page":1,"keep":true,"reason":"...","remove_fragments":["原文片段"]}]}，不得改写页码。\n"""
             + samples
         )
         for item in result.get("decisions", []):
@@ -167,12 +193,40 @@ def _page_cleaning_decisions(
             except (TypeError, ValueError):
                 continue
             if page_no in decisions:
+                fragments = item.get("remove_fragments", [])
+                if not isinstance(fragments, list):
+                    fragments = []
                 decisions[page_no] = {
                     "page": page_no,
+                    "source_page": next(
+                        (page.source_page or page.page for page in pages if page.page == page_no),
+                        page_no,
+                    ),
                     "keep": bool(item.get("keep", True)),
                     "reason": str(item.get("reason", "模型语义清洗"))[:240],
                     "method": f"llm:{client.config.provider}/{client.config.model}",
+                    "requested_remove_fragments": [
+                        str(fragment).strip()
+                        for fragment in fragments[:12]
+                        if 4 <= len(str(fragment).strip()) <= 500
+                    ],
                 }
+                decisions[page_no]["remove_fragments"] = [
+                    fragment
+                    for fragment in decisions[page_no]["requested_remove_fragments"]
+                    if _safe_partial_noise_fragment(fragment)
+                ]
+                page_text = next(
+                    (page.text for page in pages if page.page == page_no), ""
+                )
+                if not decisions[page_no]["keep"] and (
+                    extract_course_concepts(page_text)
+                    or re.search(r"[=+−±√∫ΣΩπ^_]", page_text)
+                ):
+                    decisions[page_no]["keep"] = True
+                    decisions[page_no]["reason"] = (
+                        "模型建议丢弃，但检测到课程概念或公式，安全策略强制保留"
+                    )
     return decisions
 
 
@@ -200,6 +254,20 @@ def _looks_like_formula(text: str) -> bool:
 def _looks_like_table(text: str) -> bool:
     lines = [line for line in text.splitlines() if line.strip()]
     return len(lines) >= 3 and sum(bool(re.search(r"\s{2,}|\t", line)) for line in lines) >= 2
+
+
+def _overlapping_text(
+    target_bbox: list[float], text_blocks: list[tuple[list[float], str]]
+) -> str:
+    left, top, right, bottom = target_bbox
+    matches: list[str] = []
+    for bbox, text in text_blocks:
+        block_left, block_top, block_right, block_bottom = bbox
+        horizontal = min(right, block_right) - max(left, block_left)
+        vertical = min(bottom, block_bottom) - max(top, block_top)
+        if horizontal > 0 and vertical > 0:
+            matches.append(text)
+    return "\n".join(matches).strip()
 
 
 def _circuit_image_heuristic(image_bytes: bytes) -> tuple[bool, float]:
@@ -345,8 +413,11 @@ def _analyze_image(
         raw_vlm_result = {}
     vlm_result = _normalize_circuit_result(raw_vlm_result)
     result = vlm_result
+    nearby_lower = f"{element.caption}\n{element.nearby_text}".lower()
+    chart_markers = ("波形", "曲线", "坐标", "频谱", "特性图")
+    heuristic_circuit = likely and not any(marker in nearby_lower for marker in chart_markers)
     is_circuit = bool(result.get("is_circuit")) or (
-        likely and not raw_vlm_result
+        heuristic_circuit and not raw_vlm_result
     )
     if is_circuit:
         element.element_type = "circuit"
@@ -373,24 +444,6 @@ def _analyze_image(
         element.description = result.get("description") or element.nearby_text[:1200]
         element.caption = result.get("caption", "")
         element.confidence = float(result.get("confidence") or heuristic_score)
-
-
-def _qwen_formula(
-    client: QwenVisionClient | None,
-    image_bytes: bytes,
-    nearby_text: str,
-) -> dict[str, Any]:
-    if client is None:
-        return {}
-    prompt = f"""识别图片中的电路或数学公式，只返回 JSON：
-{{"latex":"不带美元符号的标准LaTeX","description":"公式物理含义","confidence":0.0}}
-保持上下标、相量点、角度、分式和单位，不得猜测看不清的字符。
-附近教材文字：{nearby_text[:1200]}"""
-    try:
-        return client.complete_json(prompt, image_bytes=image_bytes, image_mime="image/png")
-    except QwenMultimodalAPIError as exc:
-        logger.warning("Qwen3-VL formula recognition failed: %s", exc)
-        return {}
 
 
 def _qwen_table(
@@ -447,7 +500,7 @@ def enhance_pdf(
     vision_client = (
         QwenVisionClient(
             api_key=settings.qwen_api_key,
-            model=settings.qwen_vision_model,
+            model=settings.qwen_circuit_vision_model,
             base_url=settings.qwen_base_url,
         )
         if settings.qwen_api_key
@@ -480,9 +533,49 @@ def enhance_pdf(
             decisions = {}
     if not all(item.page in decisions for item in page_documents):
         decisions = _page_cleaning_decisions(page_documents, cleaning_client)
+    # Re-apply safety policy to cached audits as the policy may become stricter
+    # between builds even when the source document and model are unchanged.
+    for page_document in page_documents:
+        decision = decisions.setdefault(
+            page_document.page,
+            {
+                "page": page_document.page,
+                "source_page": page_document.source_page or page_document.page,
+                "keep": True,
+                "reason": "默认保留课程内容",
+                "method": "rule",
+                "remove_fragments": [],
+            },
+        )
+        requested = decision.get(
+            "requested_remove_fragments", decision.get("remove_fragments", [])
+        )
+        decision["requested_remove_fragments"] = requested
+        decision["remove_fragments"] = [
+            fragment for fragment in requested
+            if _safe_partial_noise_fragment(str(fragment))
+        ]
+        if not decision.get("keep", True) and (
+            extract_course_concepts(page_document.text)
+            or re.search(r"[=+−±√∫ΣΩπ^_]", page_document.text)
+        ):
+            decision["keep"] = True
+            decision["reason"] = "检测到课程概念或公式，安全策略强制保留"
     for decision in decisions.values():
         decision["document_hash"] = document_hash
-    kept_docs = [item for item in page_documents if decisions.get(item.page, {}).get("keep", True)]
+    kept_docs: list[PageDocument] = []
+    for item in page_documents:
+        decision = decisions.get(item.page, {})
+        if not decision.get("keep", True):
+            continue
+        cleaned_text = item.text
+        removed_characters = 0
+        for fragment in decision.get("remove_fragments", []):
+            if fragment in cleaned_text:
+                cleaned_text = cleaned_text.replace(fragment, "")
+                removed_characters += len(fragment)
+        decision["removed_characters"] = removed_characters
+        kept_docs.append(replace(item, text=cleaned_text.strip()))
     page_meta = {item.page: item for item in kept_docs}
     allowed_pages = set(page_meta)
     external = _external_pdf_extract_elements(path)
@@ -535,6 +628,7 @@ def enhance_pdf(
                     id=element_id, source=path.name, page=page_no, element_type=element_type,
                     bbox=bbox, text=text, reading_order=order, chapter=meta.chapter,
                     section=meta.section, content_hash=digest,
+                    source_page=meta.source_page or page_no,
                 ))
                 order += 1
 
@@ -600,6 +694,7 @@ def enhance_pdf(
                         content_hash=digest,
                         confidence=region.confidence,
                         processor=region.detector,
+                        source_page=meta.source_page or page_no,
                     )
                     cached = cached_images.get(digest)
                     if category == "figure":
@@ -642,26 +737,13 @@ def enhance_pdf(
                                 pass
                             element.uncertain = not bool(element.text)
                     else:
-                        expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
-                        if cached and expected_vlm and str(cached.get("processor", "")).endswith(expected_vlm):
-                            for field_name in ("text", "description", "confidence", "processor", "uncertain"):
-                                if field_name in cached:
-                                    setattr(element, field_name, cached[field_name])
-                        else:
-                            result = _qwen_formula(vision_client, crop_bytes, nearby)
-                            latex = str(result.get("latex", "")).strip().strip("$")
-                            element.text = f"$${latex}$$" if latex else ""
-                            element.description = str(result.get("description", "")).strip()
-                            element.processor += (
-                                f"+{expected_vlm}" if result and expected_vlm else "+unrecognized"
-                            )
-                            try:
-                                element.confidence = max(
-                                    element.confidence, float(result.get("confidence", 0))
-                                )
-                            except (TypeError, ValueError):
-                                pass
-                            element.uncertain = not bool(latex)
+                        # Formula detection/localization belongs to PDF-Extract-Kit.
+                        # Reuse the overlapping PDF text layer instead of sending
+                        # dozens of tiny crops to the circuit-vision model.
+                        element.text = _overlapping_text(bbox_points, text_blocks)
+                        element.description = "PDF-Extract-Kit 公式区域（保留原页坐标）"
+                        element.processor += "+pymupdf-text"
+                        element.uncertain = not bool(element.text)
                     elements.append(element)
                     order += 1
 
@@ -690,6 +772,7 @@ def enhance_pdf(
                     bbox=bbox, image_path=str(image_path.relative_to(output_dir)).replace("\\", "/"),
                     reading_order=order, chapter=meta.chapter, section=meta.section,
                     nearby_text=nearby, content_hash=digest,
+                    source_page=meta.source_page or page_no,
                 )
                 cached = cached_images.get(digest)
                 expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
@@ -745,6 +828,7 @@ def enhance_pdf(
                     nearby_text="\n".join(text for _, text in text_blocks)[-3000:],
                     content_hash=digest,
                     processor="pymupdf-vector-render",
+                    source_page=meta.source_page or page_no,
                 )
                 cached = cached_images.get(digest)
                 expected_vlm = f"qwen-vl:{vision_client.model}" if vision_client else ""
@@ -799,6 +883,7 @@ def enhance_pdf(
             bbox=[float(v) for v in bbox[:4]], text=text, reading_order=100000 + index,
             chapter=meta.chapter, section=meta.section, content_hash=digest,
             processor="pdf-extract-kit",
+            source_page=meta.source_page or page_no,
         ))
 
     audit = [decisions[number] for number in sorted(decisions)]
@@ -824,6 +909,7 @@ def enhance_pdf(
 def multimodal_chunks(elements: Iterable[LayoutElement]) -> list[TextChunk]:
     chunks: list[TextChunk] = []
     seen: set[tuple[str, int, str, str]] = set()
+    seen_semantic: set[tuple[str, int, str, str]] = set()
     for element in elements:
         if element.element_type == "text":
             continue  # page-level text chunks already provide coherent overlap.
@@ -841,17 +927,38 @@ def multimodal_chunks(elements: Iterable[LayoutElement]) -> list[TextChunk]:
         text = "\n".join(part for part in body_parts if part).strip()
         if not text:
             continue
-        tags = [element.element_type]
+        semantic_key = (
+            element.source,
+            element.source_page or element.page,
+            element.element_type,
+            re.sub(r"\s+", "", text).lower()[:500],
+        )
+        if semantic_key in seen_semantic:
+            continue
+        seen_semantic.add(semantic_key)
+        semantic_text = "\n".join(
+            part for part in (
+                element.caption,
+                element.text,
+                element.description,
+                element.nearby_text,
+            )
+            if part
+        )
+        tags = extract_course_concepts(semantic_text, element.section)
         for component in element.components:
             if not isinstance(component, dict):
                 continue
             component_type = str(component.get("type", "")).strip()
-            if component_type and component_type not in tags:
-                tags.append(component_type)
+            component_concept = COMPONENT_CONCEPTS.get(component_type.lower())
+            if component_concept and component_concept not in tags:
+                tags.append(component_concept)
         chunks.append(TextChunk(
             id=f"element-{element.id}", text=text, source=element.source,
             chapter=element.chapter, section=element.section,
-            page_start=element.page, page_end=element.page, doc_type="multimodal",
+            page_start=element.source_page or element.page,
+            page_end=element.source_page or element.page,
+            doc_type="multimodal",
             knowledge_tags=tags[:12], element_type=element.element_type,
             bbox=element.bbox, parent_id=element.id, image_path=element.image_path,
             content_hash=element.content_hash,
@@ -879,9 +986,53 @@ def build_local_knowledge_graph(chunks: Iterable[TextChunk]) -> dict[str, Any]:
             seen_edges.add(edge)
 
     for chunk in chunks:
+        if chunk.doc_type == "question":
+            continue
+        document_id = "document:" + hashlib.sha1(chunk.source.encode("utf-8")).hexdigest()[:16]
+        source_stem = Path(chunk.source).stem
+        source_range = re.search(r"(?:pages?|页)[_-]?(\d+)[_-](\d+)", source_stem, re.I)
+        document_name = (
+            f"第 {source_range.group(1)}–{source_range.group(2)} 页教材节选"
+            if source_range else source_stem
+        )
+        nodes.setdefault(document_id, {
+            "id": document_id,
+            "type": "document",
+            "name": document_name,
+            "source": chunk.source,
+        })
+        page_number = chunk.page_start or chunk.page_end
+        page_id = f"page:{document_id}:{page_number or 'unknown'}"
+        nodes.setdefault(page_id, {
+            "id": page_id,
+            "type": "page",
+            "name": f"第 {page_number} 页" if page_number else "无页码片段",
+            "source": chunk.source,
+            "page": page_number,
+        })
+        add_edge(document_id, "HAS_PAGE", page_id)
         chunk_node = f"chunk:{chunk.id}"
-        nodes[chunk_node] = {"id": chunk_node, "type": "chunk", "name": chunk.section, "chunk_id": chunk.id}
-        concepts = list(dict.fromkeys(chunk.knowledge_tags))
+        element_labels = {
+            "circuit": "电路图", "formula": "公式", "table": "表格",
+            "image": "图片", "text": "正文",
+        }
+        section_name = meaningful_section(chunk.section)
+        snippet = re.sub(r"\s+", " ", chunk.text).strip()[:24]
+        chunk_label = section_name or f"{element_labels.get(chunk.element_type, '资料')} · {snippet}"
+        nodes[chunk_node] = {
+            "id": chunk_node,
+            "type": "chunk",
+            "name": chunk_label,
+            "chunk_id": chunk.id,
+            "source": chunk.source,
+            "page": page_number,
+            "element_type": chunk.element_type,
+        }
+        add_edge(page_id, "HAS_CHUNK", chunk_node)
+        concepts = [
+            concept for concept in dict.fromkeys(chunk.knowledge_tags)
+            if is_course_concept(concept)
+        ]
         for concept in concepts:
             concept_id = "concept:" + hashlib.sha1(concept.encode("utf-8")).hexdigest()[:16]
             nodes.setdefault(concept_id, {"id": concept_id, "type": "concept", "name": concept})
@@ -905,6 +1056,19 @@ def build_local_knowledge_graph(chunks: Iterable[TextChunk]) -> dict[str, Any]:
                     "component_type": str(component.get("type", "unknown")), "chunk_id": chunk.id,
                 }
                 add_edge(chunk_node, "CONTAINS", component_id)
+                component_concept = COMPONENT_CONCEPTS.get(
+                    str(component.get("type", "")).strip().lower()
+                )
+                if component_concept:
+                    concept_id = "concept:" + hashlib.sha1(
+                        component_concept.encode("utf-8")
+                    ).hexdigest()[:16]
+                    nodes.setdefault(concept_id, {
+                        "id": concept_id,
+                        "type": "concept",
+                        "name": component_concept,
+                    })
+                    add_edge(component_id, "INSTANCE_OF", concept_id)
             for position, net in enumerate(nets, 1):
                 net_ref = str(net.get("id") or net.get("name") or f"n{position}")
                 net_id = f"net:{chunk.id}:{net_ref}"
@@ -931,4 +1095,4 @@ def build_local_knowledge_graph(chunks: Iterable[TextChunk]) -> dict[str, Any]:
                         and net_ref in map(str, terminal_nets)
                     ):
                         add_edge(component_nodes[component_ref], "CONNECTED_TO", net_id)
-    return {"schema_version": "2.0", "nodes": list(nodes.values()), "edges": edges}
+    return {"schema_version": "2.1", "nodes": list(nodes.values()), "edges": edges}

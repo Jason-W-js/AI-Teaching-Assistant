@@ -41,6 +41,10 @@ class Settings:
         "QWEN_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"
     )
     qwen_vision_model: str = os.getenv("QWEN_VISION_MODEL", "qwen3-vl-plus")
+    qwen_circuit_vision_model: str = os.getenv(
+        "QWEN_CIRCUIT_VISION_MODEL", "qwen3-vl-flash"
+    )
+    qwen_cleaning_model: str = os.getenv("QWEN_CLEANING_MODEL", "qwen3.7-plus")
     qwen_vision_max_tokens: int = int(os.getenv("QWEN_VISION_MAX_TOKENS", "8192"))
     qwen_multimodal_embedding_model: str = os.getenv(
         "QWEN_MULTIMODAL_EMBEDDING_MODEL", "qwen3-vl-embedding"

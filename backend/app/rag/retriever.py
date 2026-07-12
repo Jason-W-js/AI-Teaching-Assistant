@@ -16,6 +16,7 @@ import numpy as np
 from rank_bm25 import BM25Okapi
 
 from backend.app.rag.models import RetrievalHit, TextChunk
+from backend.app.rag.embedding_runtime import encode_texts
 from backend.app.config import settings
 from backend.app.services.qwen_multimodal_client import QwenMultimodalEmbeddingClient
 
@@ -46,8 +47,6 @@ class HybridRetriever:
         self.index = faiss.deserialize_index(serialized_index)
         self._tokenized = [tokenize(self._search_text(chunk)) for chunk in self.chunks]
         self._bm25 = BM25Okapi(self._tokenized)
-        self._model: Any | None = None
-        self._model_lock = threading.Lock()
         self._cross_encoder = None
         self._cross_encoder_lock = threading.Lock()
         self._qwen_multimodal_lock = threading.Lock()
@@ -200,6 +199,9 @@ class HybridRetriever:
             graph = json.loads(path.read_text(encoding="utf-8"))
             nodes = {item["id"]: item for item in graph.get("nodes", [])}
             result: dict[str, set[str]] = {}
+            searchable_chunk_ids = {
+                chunk.id for chunk in self.chunks if chunk.doc_type != "question"
+            }
             for edge in graph.get("edges", []):
                 if edge.get("type") != "MENTIONS":
                     continue
@@ -207,7 +209,7 @@ class HybridRetriever:
                 concept = nodes.get(edge.get("target"), {})
                 name = str(concept.get("name", "")).strip().lower()
                 chunk_id = str(chunk.get("chunk_id", ""))
-                if name and chunk_id:
+                if name and chunk_id in searchable_chunk_ids:
                     result.setdefault(name, set()).add(chunk_id)
             return result
         except Exception:
@@ -218,15 +220,6 @@ class HybridRetriever:
         return " ".join(
             [chunk.chapter, chunk.section, " ".join(chunk.knowledge_tags), chunk.text]
         )
-
-    def _embedding_model(self) -> Any:
-        if self._model is None:
-            with self._model_lock:
-                if self._model is None:
-                    from sentence_transformers import SentenceTransformer
-
-                    self._model = SentenceTransformer(str(self.embedding_model_path), device="cpu")
-        return self._model
 
     def _vector_search(self, query_embedding: np.ndarray, count: int) -> tuple[dict[int, float], str]:
         qdrant_meta = self.meta.get("qdrant", {})
@@ -367,14 +360,24 @@ class HybridRetriever:
     ) -> list[RetrievalHit]:
         if not self.chunks:
             return []
-        candidate_count = min(len(self.chunks), max(k * 4, 16))
-        query_embedding = self._embedding_model().encode(
-            [query], normalize_embeddings=True, convert_to_numpy=True
-        ).astype(np.float32)
+        searchable = {
+            index for index, chunk in enumerate(self.chunks)
+            if chunk.doc_type != "question"
+        }
+        if not searchable:
+            return []
+        excluded_count = len(self.chunks) - len(searchable)
+        candidate_count = min(len(self.chunks), max(k * 4, 16) + excluded_count)
+        query_embedding = encode_texts(self.embedding_model_path, [query], batch_size=1)
         vector_map, _vector_backend = self._vector_search(query_embedding, candidate_count)
+        vector_map = {index: score for index, score in vector_map.items() if index in searchable}
         bm25_values = self._bm25.get_scores(tokenize(query))
         bm25_top = np.argsort(bm25_values)[::-1][:candidate_count]
-        bm25_map = {int(index): float(bm25_values[index]) for index in bm25_top}
+        bm25_map = {
+            int(index): float(bm25_values[index])
+            for index in bm25_top
+            if int(index) in searchable
+        }
 
         vector_norm = self._normalize(vector_map)
         bm25_norm = self._normalize(bm25_map)
@@ -384,11 +387,9 @@ class HybridRetriever:
         for index, score in visual_query_map.items():
             image_map[index] = max(image_map.get(index, -1.0), score)
         image_norm = self._normalize(image_map)
-        candidates = set(vector_map) | set(bm25_map) | set(graph_map) | set(image_map)
-        if prefer_questions:
-            candidates.update(
-                index for index, chunk in enumerate(self.chunks) if chunk.doc_type == "question"
-            )
+        candidates = (
+            set(vector_map) | set(bm25_map) | set(graph_map) | set(image_map)
+        ) & searchable
         query_tokens = set(tokenize(query))
         cross_map = self._cross_encoder_scores(query, list(candidates))
         hits: list[RetrievalHit] = []
@@ -397,7 +398,6 @@ class HybridRetriever:
             chunk_tokens = set(self._tokenized[index])
             overlap = len(query_tokens & chunk_tokens) / max(1, len(query_tokens))
             tag_overlap = len(query_tokens & set(tokenize(" ".join(chunk.knowledge_tags)))) / max(1, len(query_tokens))
-            type_bonus = 0.22 if prefer_questions and chunk.doc_type == "question" else 0.0
             rerank = (
                 0.34 * vector_norm.get(index, 0.0)
                 + 0.24 * bm25_norm.get(index, 0.0)
@@ -406,7 +406,6 @@ class HybridRetriever:
                 + 0.10 * graph_map.get(index, 0.0)
                 + 0.10 * cross_map.get(index, 0.0)
                 + 0.06 * image_norm.get(index, 0.0)
-                + type_bonus
             )
             hits.append(
                 RetrievalHit(
@@ -421,8 +420,4 @@ class HybridRetriever:
                 )
             )
         hits.sort(key=lambda hit: hit.rerank_score, reverse=True)
-        if prefer_questions:
-            question_hits = [hit for hit in hits if hit.chunk.doc_type == "question"][: min(3, k)]
-            textbook_hits = [hit for hit in hits if hit.chunk.doc_type != "question"][: max(0, k - len(question_hits))]
-            return question_hits + textbook_hits
         return hits[:k]

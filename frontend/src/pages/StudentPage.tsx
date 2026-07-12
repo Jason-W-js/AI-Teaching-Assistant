@@ -405,7 +405,7 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
           <span>{quizContext ? '会话上下文 · 不检索知识库' : `${current?.chunks || 0} 个文本块 · ${current?.documents || 0} 份资料`}</span>
         </div>
         <span className={`kb-state ${quizContext ? 'ready' : current?.state || 'missing'}`}>
-          {quizContext ? '已锁定' : current?.state === 'building' ? '构建中' : current?.state === 'ready' ? '就绪' : '待构建'}
+          {quizContext ? '已锁定' : current?.state === 'building' ? '构建中' : current?.validation?.status === 'passed' ? '已校验' : current?.state === 'ready' ? '就绪' : '待构建'}
         </span>
       </div>
 
@@ -660,30 +660,39 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
       degree.set(edge.source, (degree.get(edge.source) || 0) + 1)
       degree.set(edge.target, (degree.get(edge.target) || 0) + 1)
     })
+    const documents = graph.nodes.filter((node) => node.type === 'document').slice(0, 3)
+    const pages = graph.nodes
+      .filter((node) => node.type === 'page')
+      .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
+      .slice(0, 10)
     const concepts = graph.nodes
       .filter((node) => node.type === 'concept')
       .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
-      .slice(0, 24)
-    const conceptIds = new Set(concepts.map((node) => node.id))
+      .slice(0, 18)
+    const anchors = [...documents, ...pages, ...concepts]
+    const anchorIds = new Set(anchors.map((node) => node.id))
     const relatedIds = new Set<string>()
     graph.edges.forEach((edge) => {
-      if (conceptIds.has(edge.source)) relatedIds.add(edge.target)
-      if (conceptIds.has(edge.target)) relatedIds.add(edge.source)
+      if (anchorIds.has(edge.source)) relatedIds.add(edge.target)
+      if (anchorIds.has(edge.target)) relatedIds.add(edge.source)
     })
-    const supports = graph.nodes.filter((node) => relatedIds.has(node.id) && node.type !== 'concept').slice(0, 32)
-    const positioned = [...concepts, ...supports].map((node, index) => {
-      const isConcept = node.type === 'concept'
-      const groupIndex = isConcept ? index : index - concepts.length
-      const groupSize = isConcept ? Math.max(1, concepts.length) : Math.max(1, supports.length)
-      const angle = (Math.PI * 2 * groupIndex) / groupSize - Math.PI / 2
-      const radius = isConcept ? 150 : 235
+    const supports = graph.nodes.filter((node) => relatedIds.has(node.id) && !anchorIds.has(node.id)).slice(0, 32)
+    const groups = [
+      { nodes: documents, radius: 0 },
+      { nodes: pages, radius: 82 },
+      { nodes: concepts, radius: 165 },
+      { nodes: supports, radius: 240 },
+    ]
+    const positioned = groups.flatMap((group) => group.nodes.map((node, index) => {
+      const groupSize = Math.max(1, group.nodes.length)
+      const angle = (Math.PI * 2 * index) / groupSize - Math.PI / 2
       return {
         ...node,
-        x: 450 + Math.cos(angle) * radius,
-        y: 270 + Math.sin(angle) * radius,
+        x: 450 + Math.cos(angle) * group.radius,
+        y: 270 + Math.sin(angle) * group.radius,
         degree: degree.get(node.id) || 0,
       }
-    })
+    }))
     const ids = new Set(positioned.map((node) => node.id))
     return {
       nodes: positioned,
@@ -702,7 +711,7 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
     <section className="feature-view graph-view">
       <div className="feature-heading">
         <div><span>KNOWLEDGE MAP</span><h1>课程知识图谱</h1><p>点击节点查看知识点与教材片段之间的关系。</p></div>
-        <div className="feature-stats"><strong>{graph.stats.concepts}</strong><span>知识点</span><strong>{graph.stats.edges}</strong><span>关系</span></div>
+        <div className="feature-stats"><strong>{graph.stats.concepts}</strong><span>知识点</span><strong>{graph.stats.pages || 0}</strong><span>页面</span><strong>{graph.stats.edges}</strong><span>关系</span></div>
       </div>
       <div className="graph-layout">
         <div className="graph-canvas">
@@ -727,13 +736,13 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
                   role="button"
                   tabIndex={0}
                 >
-                  <circle r={node.type === 'concept' ? Math.min(24, 13 + node.degree) : 8} />
-                  <text y={node.type === 'concept' ? 36 : 22}>{node.name?.slice(0, 12) || '资料片段'}</text>
+                  <circle r={node.type === 'document' ? 25 : node.type === 'page' ? 16 : node.type === 'concept' ? Math.min(22, 12 + node.degree) : node.type === 'component' ? 10 : 7} />
+                  <text y={node.type === 'document' ? 40 : node.type === 'page' || node.type === 'concept' ? 32 : 21}>{node.name?.slice(0, 16) || '资料片段'}</text>
                 </g>
               ))}
             </g>
           </svg>
-          <div className="graph-legend"><span><i className="concept" />知识点</span><span><i />教材/题库片段</span></div>
+          <div className="graph-legend"><span><i className="document" />教材</span><span><i className="page" />页面</span><span><i className="concept" />知识点</span><span><i />教材片段/元件</span></div>
         </div>
         <aside className="graph-detail">
           {selected ? <><span>{selected.type === 'concept' ? '知识点' : '资料节点'}</span><h2>{selected.name || '未命名节点'}</h2><p>连接 {neighbors} 个相关节点。可回到智能学习台围绕该知识点提问，或加入学习规划。</p><code>{selected.id}</code></> : <><Network size={28} /><h2>探索知识关系</h2><p>图中较大的绿色节点是核心知识点，外围节点对应教材章节、题目或电路结构。</p></>}
@@ -1272,14 +1281,14 @@ function StudentPageContent() {
         </div>
         <Upload.Dragger
           multiple={false}
-          accept=".pdf,.md,.txt,.docx,.xlsx,.json"
+          accept=".pdf,.md,.txt,.docx"
           customRequest={uploadRequest}
           showUploadList
           className="kb-dragger"
         >
           <p className="ant-upload-drag-icon"><UploadCloud size={28} /></p>
           <p className="ant-upload-text">拖入教材或题库，或点击选择文件</p>
-          <p className="ant-upload-hint">支持 PDF、Word、Markdown、Excel、JSON，单文件最大 80 MB</p>
+          <p className="ant-upload-hint">支持 PDF、Word、Markdown、文本；Excel/JSON 题库与知识库隔离</p>
         </Upload.Dragger>
         <Button
           block

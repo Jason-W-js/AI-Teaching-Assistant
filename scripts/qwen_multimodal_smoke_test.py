@@ -43,7 +43,7 @@ def main() -> None:
         image_vector = embedding_client.embed_image(image)
 
     report = {
-        "vision_model": settings.qwen_vision_model,
+        "vision_model": settings.qwen_circuit_vision_model,
         "embedding_model": settings.qwen_multimodal_embedding_model,
         "circuit": circuit,
         "text_embedding": {

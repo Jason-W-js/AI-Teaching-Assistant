@@ -18,6 +18,7 @@ class PageDocument:
     image_path: str | None = None
     content_hash: str | None = None
     extra: dict[str, Any] | None = None
+    source_page: int | None = None
 
 
 @dataclass
