@@ -1,13 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import io
 
 import fitz
+import pytest
 from PIL import Image, ImageDraw
 
 from backend.app.rag.models import PageDocument, TextChunk
 from backend.app.rag.manager import KnowledgeBaseManager
 from backend.app.rag.pdf_extract_kit import DetectedRegion, PDFExtractKitAdapter
+from backend.app.rag.pipeline import KnowledgeBaseBuildCancelled
 from backend.app.rag.multimodal import (
     LayoutElement,
     _analyze_image,
@@ -243,6 +246,79 @@ def test_index_activation_replaces_complete_directory(tmp_path):
 
     assert (final / "version.txt").read_text(encoding="utf-8") == "new"
     assert not staging.exists()
+
+
+def test_background_build_reports_progress_and_cleans_cache_on_cancel(tmp_path, monkeypatch):
+    resources = tmp_path / "resources"
+    indexes = tmp_path / "indexes"
+    resources.mkdir()
+    indexes.mkdir()
+    manager = KnowledgeBaseManager()
+    cleaned_qdrant: list[str] = []
+    monkeypatch.setattr(manager, "resource_dir", lambda _knowledge_base: resources)
+    monkeypatch.setattr(manager, "index_dir", lambda knowledge_base: indexes / knowledge_base)
+    monkeypatch.setattr(
+        "backend.app.rag.manager.delete_qdrant_indexes",
+        lambda path: cleaned_qdrant.append(path.name),
+    )
+
+    def fake_build(_resources, output, _embedding_model, **kwargs):
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "partial.cache").write_text("partial", encoding="utf-8")
+        kwargs["progress_callback"](42, "embedding", "正在生成向量")
+        if kwargs["cancel_event"].wait(timeout=2):
+            raise KnowledgeBaseBuildCancelled("cancelled")
+        raise RuntimeError("cancel event was not received")
+
+    monkeypatch.setattr("backend.app.rag.manager.build_knowledge_base", fake_build)
+
+    async def scenario():
+        started = manager.start_build("cancel-me")
+        assert started["state"] == "building"
+        await asyncio.sleep(0.05)
+        assert manager.statuses()[0]["progress"] == 42
+
+        cancelling = manager.cancel_build("cancel-me")
+        assert cancelling["state"] == "cancelling"
+        await manager._tasks["cancel-me"]
+
+        status = manager.statuses()[0]
+        assert status["state"] == "cancelled"
+        assert "缓存已清理" in status["message"]
+        assert not list(indexes.glob(".cancel-me.building-*"))
+        assert any(name.startswith(".cancel-me.building-") for name in cleaned_qdrant)
+
+    asyncio.run(scenario())
+
+
+def test_delete_knowledge_base_removes_index_and_resources(tmp_path, monkeypatch):
+    resources_root = tmp_path / "resources"
+    indexes_root = tmp_path / "indexes"
+    resource_dir = resources_root / "knowledge_bases" / "deletable"
+    index_dir = indexes_root / "deletable"
+    resource_dir.mkdir(parents=True)
+    index_dir.mkdir(parents=True)
+    (resource_dir / "lesson.md").write_text("lesson", encoding="utf-8")
+    (index_dir / "index_meta.json").write_text("{}", encoding="utf-8")
+
+    manager = KnowledgeBaseManager()
+    manager._states["deletable"] = {
+        "id": "deletable", "state": "ready", "documents": 1, "chunks": 1,
+    }
+    monkeypatch.setattr(manager, "resource_dir", lambda _knowledge_base: resource_dir)
+    monkeypatch.setattr(manager, "index_dir", lambda _knowledge_base: index_dir)
+
+    asyncio.run(manager.delete("deletable"))
+
+    assert not resource_dir.exists()
+    assert not index_dir.exists()
+    assert manager.statuses() == []
+
+
+def test_system_default_knowledge_base_cannot_be_deleted():
+    manager = KnowledgeBaseManager()
+    with pytest.raises(RuntimeError, match="不能删除"):
+        asyncio.run(manager.delete("default"))
 
 
 def test_inline_formula_regions_remain_text_evidence_only():

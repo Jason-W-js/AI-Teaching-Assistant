@@ -6,6 +6,7 @@ import {
   Input,
   Modal,
   Popconfirm,
+  Progress,
   Segmented,
   Select,
   Tag,
@@ -51,6 +52,8 @@ import {
 import MathMarkdown from '../components/MathMarkdown'
 import {
   addMistake,
+  cancelKnowledgeBaseBuild,
+  deleteKnowledgeBase,
   deleteMistake,
   deleteSession,
   fetchKnowledgeGraph,
@@ -406,7 +409,17 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
           <span>{quizContext ? '会话上下文 · 不检索知识库' : `${current?.chunks || 0} 个文本块 · ${current?.documents || 0} 份资料`}</span>
         </div>
         <span className={`kb-state ${quizContext ? 'ready' : current?.state || 'missing'}`}>
-          {quizContext ? '已锁定' : current?.state === 'building' ? '构建中' : current?.validation?.status === 'passed' ? '已校验' : current?.state === 'ready' ? '就绪' : '待构建'}
+          {quizContext
+            ? '已锁定'
+            : current?.state === 'building'
+              ? '构建中'
+              : current?.state === 'cancelling'
+                ? '取消中'
+                : current?.state === 'cancelled'
+                  ? '已取消'
+                  : current?.validation?.status === 'passed'
+                    ? '已校验'
+                    : current?.state === 'ready' ? '就绪' : '待构建'}
         </span>
       </div>
 
@@ -1014,6 +1027,19 @@ function StudentPageContent() {
   const loadSession = useChatStore((state) => state.loadSession)
   const clear = useChatStore((state) => state.clear)
   const { message: toast } = AntApp.useApp()
+  const previousBuildStates = useRef<Record<string, KBStatus['state']>>({})
+  const activeBuilds = statuses.filter((item) => item.state === 'building' || item.state === 'cancelling')
+  const hasActiveBuilds = activeBuilds.length > 0
+  const currentKbStatus = statuses.find((item) => item.id === knowledgeBase)
+  const deleteKbDisabledReason = knowledgeBase === 'default'
+    ? '系统 default 知识库不能删除'
+    : knowledgeBase === defaultKnowledgeBase
+      ? '请先将其他知识库设为默认课程知识库'
+      : !currentKbStatus
+        ? '该知识库尚未创建'
+        : currentKbStatus.state === 'building' || currentKbStatus.state === 'cancelling'
+          ? '请先取消正在进行的构建任务'
+          : ''
 
   const refreshStatuses = async () => {
     try {
@@ -1037,6 +1063,15 @@ function StudentPageContent() {
     } catch {
       setMistakes([])
     }
+  }
+
+  const upsertBuildStatus = (state?: KBStatus) => {
+    if (!state?.id) return
+    setStatuses((current) => (
+      current.some((item) => item.id === state.id)
+        ? current.map((item) => item.id === state.id ? { ...item, ...state } : item)
+        : [...current, state]
+    ))
   }
 
   const refreshModels = async (allowAutoSwitch = false) => {
@@ -1075,6 +1110,27 @@ function StudentPageContent() {
   }, [modelModalOpen])
 
   useEffect(() => {
+    if (!hasActiveBuilds) return
+    const timer = window.setInterval(() => void refreshStatuses(), 1200)
+    return () => window.clearInterval(timer)
+  }, [hasActiveBuilds])
+
+  useEffect(() => {
+    const previous = previousBuildStates.current
+    statuses.forEach((item) => {
+      const prior = previous[item.id]
+      if (prior === 'building' || prior === 'cancelling') {
+        if (item.state === 'ready') toast.success(`知识库 ${item.id} 构建完成`)
+        if (item.state === 'cancelled') toast.info(`知识库 ${item.id} 构建已取消，缓存已清理`)
+        if (item.state === 'error') toast.error(`知识库 ${item.id} 构建失败：${item.message}`)
+      }
+    })
+    previousBuildStates.current = Object.fromEntries(
+      statuses.map((item) => [item.id, item.state]),
+    )
+  }, [statuses])
+
+  useEffect(() => {
     if (activeView !== 'graph') return
     setGraphLoading(true)
     void fetchKnowledgeGraph(knowledgeBase)
@@ -1100,13 +1156,13 @@ function StudentPageContent() {
   const defaultKbOptions = useMemo(() => statuses.map((item) => ({
     value: item.id,
     label: item.id === defaultKnowledgeBase ? `${item.id}（当前默认）` : item.id,
-    disabled: item.state !== 'ready',
+    disabled: item.state !== 'ready' && !item.available,
   })), [statuses, defaultKnowledgeBase])
 
   const chooseDefaultKnowledgeBase = (id: string) => {
     const target = statuses.find((item) => item.id === id)
-    if (!target || target.state !== 'ready') {
-      toast.warning('只有已就绪的知识库可以设为默认课程知识库')
+    if (!target || (target.state !== 'ready' && !target.available)) {
+      toast.warning('只有存在可用索引的知识库可以设为默认课程知识库')
       return
     }
     setDefaultKnowledgeBase(id)
@@ -1184,6 +1240,7 @@ function StudentPageContent() {
     try {
       const result = await uploadKnowledgeFile(options.file as File, knowledgeBase, modelConfig)
       options.onSuccess?.(result)
+      upsertBuildStatus(result.build)
       toast.success(result.message)
       void refreshStatuses()
     } catch (error) {
@@ -1196,10 +1253,40 @@ function StudentPageContent() {
   const rebuildCurrentKnowledgeBase = async () => {
     try {
       const result = await rebuildKnowledgeBase(knowledgeBase, modelConfig)
+      upsertBuildStatus(result.build)
       toast.success(result.message)
       void refreshStatuses()
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '知识库重建失败')
+    }
+  }
+
+  const cancelBuild = async (id: string) => {
+    try {
+      const result = await cancelKnowledgeBaseBuild(id)
+      setStatuses((current) => current.map((item) => (
+        item.id === id ? { ...item, ...result.state } : item
+      )))
+      toast.info(result.message)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '取消构建失败')
+    }
+  }
+
+  const removeKnowledgeBase = async () => {
+    if (knowledgeBase === defaultKnowledgeBase) {
+      toast.warning('请先选择另一个默认课程知识库，再删除当前知识库')
+      return
+    }
+    try {
+      const deleted = knowledgeBase
+      const result = await deleteKnowledgeBase(deleted)
+      setKnowledgeBase(defaultKnowledgeBase)
+      setKnowledgeGraph(undefined)
+      await refreshStatuses()
+      toast.success(result.message)
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '删除知识库失败')
     }
   }
 
@@ -1259,6 +1346,30 @@ function StudentPageContent() {
           </div>
         </header>
 
+        {activeBuilds.length > 0 && (
+          <section className="build-task-stack" aria-label="知识库构建任务">
+            {activeBuilds.map((item) => (
+              <div className="build-task-banner" key={item.id}>
+                <span className="build-task-icon"><LoaderCircle className="spin" size={18} /></span>
+                <div className="build-task-copy">
+                  <strong>{item.state === 'cancelling' ? `正在取消 ${item.id}` : `正在构建知识库 ${item.id}`}</strong>
+                  <span>{item.message}</span>
+                  <Progress percent={item.progress || 0} size="small" showInfo={false} />
+                </div>
+                <div className="build-task-progress">{item.progress || 0}%</div>
+                <Button
+                  danger
+                  size="small"
+                  disabled={!item.cancellable}
+                  onClick={() => void cancelBuild(item.id)}
+                >
+                  {item.state === 'cancelling' ? '清理中' : '取消构建'}
+                </Button>
+              </div>
+            ))}
+          </section>
+        )}
+
         {activeView === 'chat' ? (
           <section className="learning-grid">
             <div className="chat-column">
@@ -1311,13 +1422,37 @@ function StudentPageContent() {
         </div>
         <div className="modal-section">
           <label>当前目标知识库</label>
-          <Select
-            value={knowledgeBase}
-            options={kbOptions}
-            onChange={setKnowledgeBase}
-            aria-label="选择当前目标知识库"
-            style={{ width: '100%' }}
-          />
+          <div className="kb-target-row">
+            <Select
+              value={knowledgeBase}
+              options={kbOptions}
+              onChange={setKnowledgeBase}
+              aria-label="选择当前目标知识库"
+              style={{ width: '100%' }}
+            />
+            <Tooltip title={deleteKbDisabledReason || `删除知识库 ${knowledgeBase}`}>
+              <span>
+                <Popconfirm
+                  title={`确认删除知识库 ${knowledgeBase}？`}
+                  description="索引、知识图谱及已上传资料都会被永久删除。"
+                  okText="确认删除"
+                  cancelText="取消"
+                  okButtonProps={{ danger: true }}
+                  disabled={Boolean(deleteKbDisabledReason)}
+                  onConfirm={() => void removeKnowledgeBase()}
+                >
+                  <Button
+                    danger
+                    icon={<Trash2 size={15} />}
+                    disabled={Boolean(deleteKbDisabledReason)}
+                    aria-label={`删除知识库 ${knowledgeBase}`}
+                  >
+                    删除
+                  </Button>
+                </Popconfirm>
+              </span>
+            </Tooltip>
+          </div>
           <p className="modal-field-help">上传与重建仅作用于这里选择的知识库，不会改变上面的默认设置。</p>
         </div>
         <div className="new-kb-row">
@@ -1335,16 +1470,38 @@ function StudentPageContent() {
           customRequest={uploadRequest}
           showUploadList
           className="kb-dragger"
+          disabled={currentKbStatus?.state === 'building' || currentKbStatus?.state === 'cancelling'}
         >
           <p className="ant-upload-drag-icon"><UploadCloud size={28} /></p>
           <p className="ant-upload-text">拖入教材或题库，或点击选择文件</p>
           <p className="ant-upload-hint">支持 PDF、Word、Markdown、文本；Excel/JSON 题库与知识库隔离</p>
         </Upload.Dragger>
+        {(currentKbStatus?.state === 'building' || currentKbStatus?.state === 'cancelling') && (
+          <div className="modal-build-progress" aria-label={`${knowledgeBase} 构建进度`}>
+            <div>
+              <strong>{currentKbStatus.state === 'cancelling' ? '正在取消并清理缓存' : currentKbStatus.message}</strong>
+              <span>{currentKbStatus.progress || 0}%</span>
+            </div>
+            <Progress
+              percent={currentKbStatus.progress || 0}
+              status={currentKbStatus.state === 'cancelling' ? 'exception' : 'active'}
+              showInfo={false}
+            />
+            <Button
+              danger
+              block
+              disabled={!currentKbStatus.cancellable}
+              onClick={() => void cancelBuild(knowledgeBase)}
+            >
+              {currentKbStatus.state === 'cancelling' ? '正在清理未完成缓存…' : '取消本次构建'}
+            </Button>
+          </div>
+        )}
         <Button
           block
           icon={<Database size={16} />}
           onClick={() => void rebuildCurrentKnowledgeBase()}
-          disabled={statuses.find((item) => item.id === knowledgeBase)?.state === 'building'}
+          disabled={currentKbStatus?.state === 'building' || currentKbStatus?.state === 'cancelling'}
         >
           使用当前模型重新构建已有资料
         </Button>

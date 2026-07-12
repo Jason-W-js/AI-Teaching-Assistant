@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import hashlib
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -93,6 +94,42 @@ def build_qdrant_indexes(
     finally:
         if client is not None:
             client.close()
+
+
+def delete_qdrant_indexes(index_dir: Path) -> None:
+    """Remove server-side collections created for an unactivated staging index."""
+
+    location = settings.qdrant_url.strip()
+    if not location:
+        return
+    try:
+        from qdrant_client import QdrantClient
+    except ImportError:
+        return
+    client = QdrantClient(
+        url=location,
+        api_key=settings.qdrant_api_key or None,
+        timeout=120,
+    )
+    prefix = _collection_prefix(index_dir)
+    collections = {f"{prefix}_text", f"{prefix}_multimodal"}
+    meta_path = index_dir / "index_meta.json"
+    if meta_path.exists():
+        try:
+            qdrant = json.loads(meta_path.read_text(encoding="utf-8")).get("qdrant", {})
+            collections.update(
+                str(qdrant[key])
+                for key in ("text_collection", "multimodal_collection")
+                if qdrant.get(key)
+            )
+        except (OSError, ValueError, TypeError):
+            logger.warning("Failed to read Qdrant cleanup metadata from %s", meta_path)
+    try:
+        for collection in collections:
+            if client.collection_exists(collection):
+                client.delete_collection(collection)
+    finally:
+        client.close()
 
 
 def _build_qwen_multimodal_collection(

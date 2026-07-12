@@ -4,10 +4,11 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import unicodedata
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 import fitz
 import numpy as np
@@ -29,6 +30,13 @@ from backend.app.rag.stores import build_qdrant_indexes, sync_neo4j_graph
 
 
 logger = logging.getLogger(__name__)
+
+
+class KnowledgeBaseBuildCancelled(RuntimeError):
+    """Raised when a cooperative knowledge-base build cancellation is requested."""
+
+
+BuildProgressCallback = Callable[[int, str, str], None]
 
 KNOWLEDGE_EXTENSIONS = {".pdf", ".md", ".txt", ".docx"}
 QUESTION_BANK_EXTENSIONS = {".xlsx", ".json"}
@@ -524,12 +532,21 @@ def build_knowledge_base(
     model_config: BuildModelConfig | None = None,
     knowledge_base_id: str | None = None,
     sync_graph_store: bool = True,
+    progress_callback: BuildProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    def report(progress: int, stage: str, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(progress, stage, message)
+        if cancel_event is not None and cancel_event.is_set():
+            raise KnowledgeBaseBuildCancelled("用户已取消知识库构建")
+
     resources_dir = resources_dir.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     cleaned_dir = output_dir / "cleaned_documents"
     cleaned_dir.mkdir(parents=True, exist_ok=True)
+    report(5, "document_scanning", "正在扫描教材与讲义")
 
     documents: list[PageDocument] = []
     elements: list[LayoutElement] = []
@@ -549,7 +566,13 @@ def build_knowledge_base(
         for path in candidate_files
         if path.suffix.lower() in QUESTION_BANK_EXTENSIONS
     ]
-    for path in source_files:
+    source_count = max(1, len(source_files))
+    for source_index, path in enumerate(source_files):
+        report(
+            10 + int(source_index / source_count * 35),
+            "document_parsing",
+            f"正在解析 {path.name}（{source_index + 1}/{len(source_files)}）",
+        )
         suffix = path.suffix.lower()
         if suffix == ".pdf":
             extracted = extract_pdf(path, chapter_limit)
@@ -573,6 +596,11 @@ def build_knowledge_base(
             extracted = extract_docx(path)
             documents.extend(extracted)
             _write_clean_markdown(path, extracted, cleaned_dir)
+        report(
+            10 + int((source_index + 1) / source_count * 35),
+            "document_cleaning",
+            f"已完成 {path.name} 的解析与清洗",
+        )
     structured_questions = {
         "schema_version": "2.0",
         "questions": [],
@@ -583,6 +611,7 @@ def build_knowledge_base(
         json.dumps(structured_questions, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    report(50, "chunking", "正在切分文本并整理多模态元素")
     chunks = chunk_documents(documents) + multimodal_chunks(elements)
     if not chunks:
         raise RuntimeError(f"在 {resources_dir} 中没有提取到可索引内容")
@@ -600,6 +629,7 @@ def build_knowledge_base(
         json.dumps(cleaning_audits, ensure_ascii=False, indent=2), encoding="utf-8"
     )
 
+    report(60, "knowledge_graph", "正在构建知识图谱关系")
     graph = build_local_knowledge_graph(chunks)
     (output_dir / "knowledge_graph.json").write_text(
         json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -618,12 +648,14 @@ def build_knowledge_base(
         )
         for chunk in chunks
     ]
+    report(68, "embedding", f"正在生成 {len(chunks)} 个内容向量")
     embeddings = encode_texts(
         embedding_model_path,
         embedding_texts,
         batch_size=32,
         show_progress_bar=True,
     )
+    report(82, "validation", "正在校验向量与图谱完整性")
     validation = validate_build_artifacts(chunks, embeddings, graph)
     import faiss
 
@@ -634,6 +666,7 @@ def build_knowledge_base(
     serialized_index = faiss.serialize_index(index)
     (output_dir / "vectors.faiss").write_bytes(serialized_index.tobytes())
 
+    report(85, "indexing", "正在写入向量索引")
     qdrant_status = build_qdrant_indexes(output_dir, chunks, embeddings)
     neo4j_status = (
         sync_neo4j_graph(knowledge_base_id or output_dir.name, graph)
@@ -725,5 +758,6 @@ def build_knowledge_base(
     (output_dir / "index_meta.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    report(88, "artifacts_ready", "构建产物已生成，等待原子切换")
     logger.info("Knowledge base populated: %s", metadata)
     return metadata

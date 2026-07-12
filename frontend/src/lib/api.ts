@@ -19,10 +19,17 @@ export type SourceInfo = {
 
 export type KBStatus = {
   id: string
-  state: 'ready' | 'building' | 'error' | 'missing'
+  state: 'ready' | 'building' | 'cancelling' | 'cancelled' | 'error' | 'missing'
   documents: number
   chunks: number
   message: string
+  available?: boolean
+  progress?: number
+  stage?: string
+  cancellable?: boolean
+  started_at?: string
+  updated_at?: string
+  completed_at?: string
   validation?: { status?: string; question_chunks?: number }
   pipeline_layers?: Record<string, { status?: string }>
 }
@@ -329,5 +336,23 @@ export async function rebuildKnowledgeBase(
   })
   const result = await response.json()
   if (!response.ok) throw new Error(result.detail || result.error || '重建失败')
+  return result
+}
+
+export async function cancelKnowledgeBaseBuild(knowledgeBase: string) {
+  const response = await fetch(`/api/kb/${encodeURIComponent(knowledgeBase)}/build`, {
+    method: 'DELETE',
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.detail || result.error || '取消构建失败')
+  return result
+}
+
+export async function deleteKnowledgeBase(knowledgeBase: string) {
+  const response = await fetch(`/api/kb/${encodeURIComponent(knowledgeBase)}`, {
+    method: 'DELETE',
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.detail || result.error || '删除知识库失败')
   return result
 }

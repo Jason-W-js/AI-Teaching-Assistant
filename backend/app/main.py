@@ -181,7 +181,7 @@ async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[s
         base_url=base_url,
     )
     try:
-        knowledge_bases.start_build(
+        build_state = knowledge_bases.start_build(
             payload.knowledge_base,
             chapter_limit=payload.chapter_limit,
             model_config=config if config.enabled else None,
@@ -192,7 +192,41 @@ async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[s
         "ok": True,
         "knowledge_base": payload.knowledge_base,
         "state": "building",
+        "build": build_state,
         "message": "多模态知识库已开始后台重建",
+    }
+
+
+@app.delete("/api/kb/{knowledge_base}/build")
+async def cancel_knowledge_base_build(knowledge_base: str) -> dict[str, Any]:
+    try:
+        state = knowledge_bases.cancel_build(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "knowledge_base": knowledge_base,
+        "state": state,
+        "message": "取消请求已提交，正在清理未完成缓存",
+    }
+
+
+@app.delete("/api/kb/{knowledge_base}")
+async def delete_knowledge_base(knowledge_base: str) -> dict[str, Any]:
+    try:
+        await knowledge_bases.delete(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "knowledge_base": knowledge_base,
+        "message": f"知识库 {knowledge_base} 已删除",
     }
 
 
@@ -584,6 +618,7 @@ async def upload(
     await file.close()
 
     indexable = suffix in {".pdf", ".md", ".txt", ".docx"}
+    build_state: dict[str, Any] | None = None
     if rebuild and indexable:
         provided_api_key = bool(api_key.strip())
         if model_provider == "deepseek":
@@ -599,7 +634,7 @@ async def upload(
             base_url=base_url.strip(),
         )
         try:
-            knowledge_bases.start_build(
+            build_state = knowledge_bases.start_build(
                 knowledge_base,
                 chapter_limit=None,
                 model_config=build_model if build_model.enabled else None,
@@ -613,6 +648,7 @@ async def upload(
         "content_type": file.content_type or mimetypes.guess_type(original_name)[0],
         "knowledge_base": knowledge_base,
         "indexing": bool(rebuild and indexable),
+        "build": build_state,
         "multimodal_model": f"{model_provider}/{model}" if model else "未配置，使用安全降级",
         "message": "文件已保存，知识库正在后台更新" if rebuild and indexable else "文件已保存",
     }
