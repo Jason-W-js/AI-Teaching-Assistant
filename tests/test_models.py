@@ -9,7 +9,11 @@ from backend.app.agents.workflow import CircuitTutorEngine
 from backend.app.schemas import ChatRequest
 from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
-from backend.app.services.model_catalog import choose_default_model
+from backend.app.services.model_catalog import (
+    canonical_model_id,
+    chat_model_unavailable_reason,
+    choose_default_model,
+)
 
 
 def test_chat_request_defaults_to_required_local_qwen():
@@ -138,6 +142,30 @@ def test_running_ollama_uses_an_installed_model_when_default_is_missing():
         deepseek_configured=False,
     )
     assert (provider, model) == ("ollama", "qwen3.5:4b")
+
+
+def test_qwen_display_alias_is_canonicalized_to_exact_api_id():
+    assert canonical_model_id("qwen", "Qwen3.7-Plus") == "qwen3.7-plus"
+    assert canonical_model_id("qwen", "Qwen3.7-Max") == "qwen3.7-max"
+    assert canonical_model_id("custom", "My-Qwen-Proxy") == "My-Qwen-Proxy"
+
+
+def test_embedding_model_is_rejected_for_chat_completions():
+    reason = chat_model_unavailable_reason("qwen", "qwen3-vl-embedding")
+    assert "Chat Completions" in reason
+
+
+def test_nested_provider_error_returns_readable_message():
+    response = httpx.Response(
+        404,
+        json={
+            "error": json.dumps({
+                "message": "The model Qwen3.7-Plus does not exist",
+                "code": "model_not_found",
+            })
+        },
+    )
+    assert OpenAICompatibleClient._error_detail(response) == "The model Qwen3.7-Plus does not exist"
 
 
 def test_answer_workflow_uses_request_selected_client():

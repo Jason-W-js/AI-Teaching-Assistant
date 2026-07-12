@@ -109,7 +109,16 @@ const fallbackModelCatalog: ModelCatalog = {
       id: 'qwen',
       label: '通义千问 API',
       description: '阿里云百炼文本与多模态 OpenAI 兼容接口',
-      models: ['Qwen3.7-Plus', 'Qwen3.7-Max', 'qwen-vl-max', 'qwen3-vl-8b-instruct', 'qwen3-vl-plus', 'qwen3-vl-flash', 'qwen3-vl-embedding'],
+      models: ['qwen3.7-plus', 'qwen3.7-max', 'qwen-vl-max', 'qwen3-vl-plus', 'qwen3-vl-flash'],
+      model_options: [
+        { value: 'qwen3.7-plus', label: 'Qwen3.7-Plus' },
+        { value: 'qwen3.7-max', label: 'Qwen3.7-Max' },
+        { value: 'qwen-vl-max', label: 'qwen-vl-max' },
+        { value: 'qwen3-vl-8b-instruct', label: 'qwen3-vl-8b-instruct', disabled: true, description: '当前账号未开放' },
+        { value: 'qwen3-vl-plus', label: 'qwen3-vl-plus' },
+        { value: 'qwen3-vl-flash', label: 'qwen3-vl-flash' },
+        { value: 'qwen3-vl-embedding', label: 'qwen3-vl-embedding', disabled: true, description: '仅用于向量化' },
+      ],
       default_model: 'qwen3-vl-plus',
       base_url: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
       requires_api_key: true,
@@ -794,6 +803,12 @@ function ModelSettingsModal({
 
   const provider = catalog.providers.find((item) => item.id === draft.provider)
     || fallbackModelCatalog.providers[0]
+  const selectableModels = provider.model_options || provider.models.map((model) => ({
+    value: model,
+    label: model,
+    disabled: false,
+    description: '',
+  }))
 
   const chooseProvider = (id: ModelProviderId) => {
     const next = catalog.providers.find((item) => item.id === id)
@@ -817,6 +832,11 @@ function ModelSettingsModal({
     }
     if (provider.requires_api_key && !provider.configured && !draft.apiKey.trim()) {
       toast.warning('请填写 API Key，或在后端环境变量中配置')
+      return
+    }
+    const selectedOption = provider.model_options?.find((option) => option.value === draft.model)
+    if (selectedOption?.disabled) {
+      toast.warning(selectedOption.description || '该模型不能用于当前对话')
       return
     }
     setModelConfig({ ...draft, model: draft.model.trim(), baseUrl: draft.baseUrl.trim() })
@@ -880,7 +900,11 @@ function ModelSettingsModal({
           {draft.provider !== 'custom' ? (
             <Select
               value={draft.model}
-              options={provider.models.map((model) => ({ value: model, label: model }))}
+              options={selectableModels.map((option) => ({
+                value: option.value,
+                label: option.description ? `${option.label} · ${option.description}` : option.label,
+                disabled: option.disabled,
+              }))}
               onChange={(model) => setDraft((value) => ({ ...value, model }))}
               style={{ width: '100%' }}
               showSearch

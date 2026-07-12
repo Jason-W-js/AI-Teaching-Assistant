@@ -108,6 +108,13 @@ class OpenAICompatibleClient:
             error = data.get("error", data)
             if isinstance(error, dict):
                 return str(error.get("message") or error.get("code") or response.reason_phrase)
+            if isinstance(error, str):
+                try:
+                    nested = json.loads(error)
+                    if isinstance(nested, dict):
+                        return str(nested.get("message") or nested.get("code") or error)
+                except json.JSONDecodeError:
+                    pass
             return str(error)
         except (ValueError, TypeError):
             return response.text[:300] or response.reason_phrase

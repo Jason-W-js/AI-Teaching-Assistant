@@ -46,6 +46,16 @@ function getSessionId() {
   return value
 }
 
+function canonicalModel(provider: ModelProviderId, model: string) {
+  const normalized = model.trim()
+  if (provider !== 'qwen') return normalized
+  const canonical = normalized.toLowerCase()
+  if (canonical === 'qwen3-vl-embedding' || canonical === 'qwen3-vl-8b-instruct') {
+    return 'qwen3-vl-plus'
+  }
+  return canonical
+}
+
 function getStudentId() {
   let value = localStorage.getItem(studentKey)
   if (!value) {
@@ -62,12 +72,14 @@ function getModelConfig(): ModelConfig {
     if (!providers.includes(stored.provider) || typeof stored.model !== 'string') {
       return defaultModelConfig
     }
-    return {
+    const config = {
       provider: stored.provider,
-      model: stored.model || defaultModelConfig.model,
+      model: canonicalModel(stored.provider, stored.model || defaultModelConfig.model),
       apiKey: typeof stored.apiKey === 'string' ? stored.apiKey : '',
       baseUrl: typeof stored.baseUrl === 'string' ? stored.baseUrl : '',
     }
+    localStorage.setItem(modelConfigKey, JSON.stringify(config))
+    return config
   } catch {
     return defaultModelConfig
   }
@@ -112,8 +124,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
   setMode: (mode) => set({ mode }),
   setKnowledgeBase: (knowledgeBase) => set({ knowledgeBase }),
   setModelConfig: (modelConfig) => {
-    localStorage.setItem(modelConfigKey, JSON.stringify(modelConfig))
-    set({ modelConfig })
+    const normalized = { ...modelConfig, model: canonicalModel(modelConfig.provider, modelConfig.model) }
+    localStorage.setItem(modelConfigKey, JSON.stringify(normalized))
+    set({ modelConfig: normalized })
   },
   addAttachments: async (files) => {
     const available = Math.max(0, 5 - get().pendingAttachments.length)

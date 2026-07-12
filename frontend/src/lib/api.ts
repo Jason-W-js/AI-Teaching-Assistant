@@ -53,6 +53,12 @@ export type ModelProviderInfo = {
   requires_api_key: boolean
   configured: boolean
   status_message?: string
+  model_options?: Array<{
+    value: string
+    label: string
+    disabled?: boolean
+    description?: string
+  }>
 }
 
 export type ModelCatalog = {

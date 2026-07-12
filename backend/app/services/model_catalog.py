@@ -3,15 +3,51 @@ from __future__ import annotations
 from typing import Any
 
 
-QWEN_MODELS = [
-    "Qwen3.7-Plus",
-    "Qwen3.7-Max",
-    "qwen-vl-max",
-    "qwen3-vl-8b-instruct",
-    "qwen3-vl-plus",
-    "qwen3-vl-flash",
-    "qwen3-vl-embedding",
+QWEN_MODEL_OPTIONS = [
+    {"value": "qwen3.7-plus", "label": "Qwen3.7-Plus"},
+    {"value": "qwen3.7-max", "label": "Qwen3.7-Max"},
+    {"value": "qwen-vl-max", "label": "qwen-vl-max"},
+    {
+        "value": "qwen3-vl-8b-instruct",
+        "label": "qwen3-vl-8b-instruct",
+        "disabled": True,
+        "description": "当前百炼账号未开放此模型 ID",
+    },
+    {"value": "qwen3-vl-plus", "label": "qwen3-vl-plus"},
+    {"value": "qwen3-vl-flash", "label": "qwen3-vl-flash"},
+    {
+        "value": "qwen3-vl-embedding",
+        "label": "qwen3-vl-embedding",
+        "disabled": True,
+        "description": "仅用于知识库多模态向量化，不支持 Chat Completions",
+    },
 ]
+
+QWEN_MODELS = [
+    str(option["value"])
+    for option in QWEN_MODEL_OPTIONS
+    if not option.get("disabled")
+]
+
+QWEN_CHAT_DISABLED_REASONS = {
+    str(option["value"]): str(option["description"])
+    for option in QWEN_MODEL_OPTIONS
+    if option.get("disabled")
+}
+
+
+def canonical_model_id(provider: str, model: str) -> str:
+    """Translate UI display aliases and legacy saved values to exact API IDs."""
+    normalized = model.strip()
+    if provider == "qwen" and normalized.lower().startswith("qwen"):
+        return normalized.lower()
+    return normalized
+
+
+def chat_model_unavailable_reason(provider: str, model: str) -> str:
+    if provider != "qwen":
+        return ""
+    return QWEN_CHAT_DISABLED_REASONS.get(canonical_model_id(provider, model), "")
 
 
 def choose_default_model(

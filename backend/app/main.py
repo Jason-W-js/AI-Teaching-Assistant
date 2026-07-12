@@ -27,7 +27,13 @@ from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
 from backend.app.services.mistake_book import MistakeBook
-from backend.app.services.model_catalog import QWEN_MODELS, choose_default_model
+from backend.app.services.model_catalog import (
+    QWEN_MODELS,
+    QWEN_MODEL_OPTIONS,
+    canonical_model_id,
+    chat_model_unavailable_reason,
+    choose_default_model,
+)
 
 
 def configure_logging() -> None:
@@ -170,7 +176,7 @@ async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[s
         base_url = (base_url or settings.qwen_base_url) if payload.api_key else settings.qwen_base_url
     config = BuildModelConfig(
         provider=payload.model_provider,
-        model=payload.model,
+        model=canonical_model_id(payload.model_provider, payload.model),
         api_key=api_key,
         base_url=base_url,
     )
@@ -261,6 +267,7 @@ async def available_models() -> dict[str, Any]:
                 "label": "通义千问 API",
                 "description": "阿里云百炼文本与多模态 OpenAI 兼容接口",
                 "models": list(dict.fromkeys([*QWEN_MODELS, settings.qwen_vision_model])),
+                "model_options": QWEN_MODEL_OPTIONS,
                 "default_model": settings.qwen_vision_model,
                 "base_url": settings.qwen_base_url,
                 "requires_api_key": True,
@@ -353,10 +360,14 @@ async def delete_mistake(mistake_id: str, student_id: str) -> dict[str, Any]:
 
 
 def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
+    model = canonical_model_id(payload.model_provider, payload.model)
+    unavailable_reason = chat_model_unavailable_reason(payload.model_provider, model)
+    if unavailable_reason:
+        raise ValueError(f"模型 {model} 不能用于对话：{unavailable_reason}")
     if payload.model_provider == "ollama":
-        if payload.model == settings.ollama_model:
+        if model == settings.ollama_model:
             return ollama, False
-        return OllamaClient(model=payload.model), True
+        return OllamaClient(model=model), True
 
     if payload.model_provider == "deepseek":
         api_key = payload.api_key or settings.deepseek_api_key
@@ -375,7 +386,7 @@ def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
     return (
         OpenAICompatibleClient(
             provider=payload.model_provider,
-            model=payload.model,
+            model=model,
             api_key=api_key,
             base_url=base_url,
         ),
@@ -583,7 +594,7 @@ async def upload(
             base_url = (base_url or settings.qwen_base_url) if provided_api_key else settings.qwen_base_url
         build_model = BuildModelConfig(
             provider=model_provider,
-            model=model.strip(),
+            model=canonical_model_id(model_provider, model),
             api_key=api_key.strip(),
             base_url=base_url.strip(),
         )
