@@ -9,6 +9,7 @@ export type ChatMessage = {
   content: string
   agent?: string
   sources?: SourceInfo[]
+  citedSources?: SourceInfo[]
   failed?: boolean
   attachments?: AttachmentInfo[]
   model?: string
@@ -117,9 +118,20 @@ function legacySourcesFromContent(content: string): SourceInfo[] {
       score: 0,
       doc_type: 'textbook',
       historical: true,
+      citation_index: Number(match[1]),
     })
   }
   return sources
+}
+
+function citedSourcesFromContent(content: string, sources: SourceInfo[]): SourceInfo[] {
+  const citedIndices = new Set<number>()
+  for (const match of content.matchAll(/\[资料\s*(\d+)\]/g)) {
+    citedIndices.add(Number(match[1]))
+  }
+  return sources.filter((source, index) =>
+    citedIndices.has(source.citation_index || index + 1),
+  )
 }
 
 type ChatState = {
@@ -134,6 +146,7 @@ type ChatState = {
   stage: string
   stageAgent: string
   activeSources: SourceInfo[]
+  activeCitedSources: SourceInfo[]
   activeMessageId?: string
   pendingAttachments: PendingAttachment[]
   controller?: AbortController
@@ -163,6 +176,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   stage: '',
   stageAgent: '',
   activeSources: [],
+  activeCitedSources: [],
   activeMessageId: undefined,
   pendingAttachments: [],
   setMode: (mode) => set({ mode }),
@@ -244,6 +258,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return {
       activeMessageId: messageId,
       activeSources: message.sources || [],
+      activeCitedSources: message.citedSources || [],
     }
   }),
   loadSession: (sessionId, storedMessages) => {
@@ -253,6 +268,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const sources = item.sources?.length
         ? item.sources
         : legacySourcesFromContent(item.content)
+      const citedSources = item.cited_sources?.length
+        ? item.cited_sources
+        : citedSourcesFromContent(item.content, sources)
       return {
         id: `history-${item.created_at}-${index}`,
         role: item.role,
@@ -263,6 +281,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         knowledgeBase: item.knowledge_base,
         attachments: item.attachments || [],
         sources,
+        citedSources,
       }
     })
     const latestAssistant = [...messages].reverse().find((item) => item.role === 'assistant')
@@ -273,6 +292,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stage: '',
       stageAgent: '',
       activeSources: latestAssistant?.sources || [],
+      activeCitedSources: latestAssistant?.citedSources || [],
       activeMessageId: latestAssistant?.id,
       pendingAttachments: [],
       controller: undefined,
@@ -315,6 +335,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stage: `正在连接 ${selectedModel.model}…`,
       stageAgent: '系统',
       activeSources: [],
+      activeCitedSources: [],
       activeMessageId: assistantId,
       pendingAttachments: [],
       controller,
@@ -340,6 +361,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
                 state.activeMessageId === assistantId
                   ? data.sources || []
                   : state.activeSources,
+              activeCitedSources:
+                state.activeMessageId === assistantId
+                  ? data.cited_sources || []
+                  : state.activeCitedSources,
               messages: state.messages.map((item) =>
                 item.id === assistantId
                   ? {
@@ -348,6 +373,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
                       provider: data.provider,
                       model: data.model,
                       sources: data.sources,
+                      citedSources: data.cited_sources,
                     }
                   : item,
               ),
@@ -420,6 +446,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streaming: false,
       stage: '',
       activeSources: [],
+      activeCitedSources: [],
       activeMessageId: undefined,
       pendingAttachments: [],
       controller: undefined,

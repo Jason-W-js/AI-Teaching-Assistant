@@ -17,6 +17,7 @@ export type SourceInfo = {
   rerank_score?: number
   knowledge_base?: string
   historical?: boolean
+  citation_index?: number
 }
 
 export type KBStatus = {
@@ -111,6 +112,7 @@ export type MistakeItem = {
   summary: string
   agent: string
   knowledge_points: string[]
+  attachments?: AttachmentInfo[]
   created_at: string
 }
 
@@ -132,11 +134,12 @@ export type StoredMessage = {
   knowledge_base?: string
   attachments?: AttachmentInfo[]
   sources?: SourceInfo[]
+  cited_sources?: SourceInfo[]
 }
 
 type SSECallbacks = {
   onStatus: (data: { stage: string; message: string; agent: string }) => void
-  onMeta: (data: { intent: string; agent: string; provider: ModelProviderId; model: string; sources: SourceInfo[]; verification?: Record<string, unknown> }) => void
+  onMeta: (data: { intent: string; agent: string; provider: ModelProviderId; model: string; sources: SourceInfo[]; cited_sources: SourceInfo[]; verification?: Record<string, unknown> }) => void
   onDelta: (content: string) => void
   onDone: () => void
   onError: (message: string) => void
@@ -285,6 +288,7 @@ export async function addMistake(
   sessionId: string,
   content: string,
   agent: string,
+  attachments: AttachmentInfo[],
   modelConfig: ModelConfig,
 ): Promise<MistakeItem> {
   const response = await fetch('/api/mistakes', {
@@ -295,6 +299,7 @@ export async function addMistake(
       session_id: sessionId,
       content,
       agent,
+      attachment_ids: attachments.map((attachment) => attachment.id),
       model_provider: modelConfig.provider,
       model: modelConfig.model,
       api_key: modelConfig.apiKey,

@@ -198,13 +198,18 @@ button { color: inherit; }
 .kb-state.building { color: #a45b2c; background: #feeadc; }
 .kb-state.cancelling { color: #a45b2c; background: #feeadc; }
 .kb-state.error, .kb-state.missing, .kb-state.cancelled { color: #996369; background: #f6e5e7; }
+.source-usage-summary { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; padding: 7px 9px; color: #688681; background: #f2f8f6; border: 1px solid #e0eeea; border-radius: 8px; font-size: 9px; }
+.source-usage-summary strong { color: #18766d; font-size: 9px; }
+.source-usage-summary.uncited strong { color: #a45b2c; }
 .source-list { flex: 1; min-height: 0; margin-top: 15px; padding-right: 3px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d0dcd9 transparent; }
 .source-card { padding: 12px; margin-bottom: 9px; background: #fff; border: 1px solid #e0e8e5; border-radius: 11px; box-shadow: 0 3px 12px rgba(33,64,61,.025); }
 .source-card-openable { cursor: pointer; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
 .source-card-openable:hover, .source-card-openable:focus-visible { border-color: #79bbb2; outline: none; box-shadow: 0 8px 22px rgba(18,100,95,.1); transform: translateY(-1px); }
 .source-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.source-labels { display: inline-flex; align-items: center; gap: 6px; }
 .source-type { display: inline-flex; align-items: center; gap: 4px; color: #56877f; font-size: 8px; font-weight: 800; text-transform: uppercase; }
 .source-type.question { color: #bd682f; }
+.source-cited-badge { padding: 2px 5px; color: #fff; background: #19786f; border-radius: 8px; font-size: 8px; font-weight: 800; }
 .source-score { color: #5c8d83; font-size: 9px; font-weight: 800; }
 .source-card > strong { display: block; overflow: hidden; color: #25494c; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .source-card > p { overflow: hidden; margin: 5px 0 8px; color: #899a98; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
@@ -450,6 +455,10 @@ button { color: inherit; }
 .mistake-card-head > span { color: #24786f; font-weight: 700; }
 .mistake-card h2 { margin: 9px 0 8px; color: #294f50; font-size: 14px; }
 .mistake-points { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 10px; }
+.mistake-attachments { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.mistake-attachments a { display: block; overflow: hidden; color: #356b67; background: #f2f7f5; border: 1px solid #dfeae7; border-radius: 9px; }
+.mistake-attachments img { display: block; width: 100%; height: 150px; object-fit: contain; background: #eef5f2; }
+.mistake-attachments span { display: flex; align-items: center; gap: 6px; padding: 11px; font-size: 10px; }
 .mistake-content { max-height: 210px; overflow: auto; padding: 10px; color: #4f6b69; background: #f8faf9; border-radius: 8px; font-size: 10px; }
 .mistake-content h2, .mistake-content h3 { font-size: 12px; }
 .mistake-delete { display: flex; align-items: center; gap: 4px; margin-top: 10px; padding: 4px 0; color: #a36f68; background: none; border: 0; font-size: 9px; cursor: pointer; }

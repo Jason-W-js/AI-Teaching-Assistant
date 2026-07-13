@@ -10,6 +10,33 @@ from uuid import uuid4
 from backend.app.config import settings
 
 
+def _normalized_content(content: str) -> str:
+    return "\n".join(line.rstrip() for line in content.strip().splitlines()).strip()
+
+
+def related_mistake_attachments(
+    history: list[dict[str, Any]], content: str, agent: str
+) -> list[dict[str, Any]]:
+    """Recover the attachment on the archived turn, including assistant answers."""
+    target = _normalized_content(content)
+    for index, message in enumerate(history):
+        if _normalized_content(str(message.get("content", ""))) != target:
+            continue
+        direct = message.get("attachments")
+        if isinstance(direct, list) and direct:
+            return [item for item in direct if isinstance(item, dict)]
+        if message.get("role") != "assistant" and agent == "学生原题":
+            return []
+        for previous in reversed(history[:index]):
+            if previous.get("role") != "user":
+                continue
+            attachments = previous.get("attachments")
+            if isinstance(attachments, list) and attachments:
+                return [item for item in attachments if isinstance(item, dict)]
+            break
+    return []
+
+
 class MistakeBook:
     """Small durable mistake store with atomic writes and per-student isolation."""
 
@@ -44,8 +71,14 @@ class MistakeBook:
         agent: str,
         knowledge_points: list[str],
         summary: str,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        normalized = "\n".join(line.rstrip() for line in content.strip().splitlines()).strip()
+        normalized = _normalized_content(content)
+        stored_attachments = [
+            dict(attachment)
+            for attachment in (attachments or [])
+            if isinstance(attachment, dict) and attachment.get("id")
+        ][:5]
         async with self._lock:
             items = self._read()
             duplicate = next(
@@ -58,6 +91,10 @@ class MistakeBook:
                 None,
             )
             if duplicate:
+                if stored_attachments and not duplicate.get("attachments"):
+                    duplicate["attachments"] = stored_attachments
+                    duplicate["session_id"] = session_id
+                    self._write(items)
                 return duplicate
             item = {
                 "id": uuid4().hex,
@@ -67,6 +104,7 @@ class MistakeBook:
                 "summary": summary.strip() or normalized[:80],
                 "agent": agent.strip() or "学习 Agent",
                 "knowledge_points": list(dict.fromkeys(point.strip() for point in knowledge_points if point.strip()))[:12],
+                "attachments": stored_attachments,
                 "created_at": datetime.now(timezone.utc).isoformat(),
             }
             items.append(item)

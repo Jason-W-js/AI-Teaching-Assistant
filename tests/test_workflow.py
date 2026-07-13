@@ -2,16 +2,134 @@ import asyncio
 
 from backend.app.agents.workflow import (
     CircuitTutorEngine,
+    _contextual_attachment_ids,
     _detect_quiz_family,
+    _finalize_answer_citations,
+    _plan_schedule_guidance,
     _quiz_reference,
     _quiz_family_matches,
     _recent_generated_questions,
 )
+from backend.app.rag.models import RetrievalHit, TextChunk
+
+
+def _retrieval_hit(index: int) -> RetrievalHit:
+    return RetrievalHit(
+        chunk=TextChunk(
+            id=f"chunk-{index}",
+            text=f"资料正文 {index}",
+            source="教材.pdf",
+            chapter="第二章 基本放大电路",
+            section=f"2.{index} 测试章节",
+            page_start=60 + index,
+            page_end=60 + index,
+            doc_type="textbook",
+            knowledge_tags=["放大电路"],
+        ),
+        score=0.5,
+        vector_score=0.5,
+        bm25_score=0.5,
+        rerank_score=0.5,
+    )
 
 
 def test_sympy_verification_passes():
     result = CircuitTutorEngine._verify_expression("10/(2000+3000)", "0.002")
     assert result["passed"] is True
+
+
+def test_backend_rebuilds_reference_section_from_valid_inline_citations():
+    hits = [_retrieval_hit(index) for index in range(1, 5)]
+    model_response = (
+        "结论由第四条资料支持 [资料4]。\n\n"
+        "### 检索依据\n\n"
+        "- [资料1] 模型自行生成的错误清单"
+    )
+
+    response, cited_sources = _finalize_answer_citations(model_response, hits)
+
+    assert "模型自行生成的错误清单" not in response
+    assert response.endswith(
+        "- [资料4] 教材.pdf · 第二章 基本放大电路 · 2.4 测试章节 · 第 64 页"
+    )
+    assert [source["id"] for source in cited_sources] == ["chunk-4"]
+    assert cited_sources[0]["citation_index"] == 4
+
+
+def test_backend_does_not_present_retrieval_candidates_as_citations():
+    response, cited_sources = _finalize_answer_citations(
+        "这段回答没有引用编号。", [_retrieval_hit(1)]
+    )
+
+    assert "未检测到正文中的有效资料引用" in response
+    assert cited_sources == []
+
+
+def test_streaming_suppresses_model_reference_list_and_emits_backend_list_once():
+    class FakeCitationModel:
+        model = "fake-citation-model"
+
+        async def stream_chat(self, _messages, **_kwargs):
+            yield "结论：" + "共射放大电路。" * 35 + "[资料2]。"
+            yield "\n\n### 检索"
+            yield "依据\n\n- [资料1] 模型错误清单"
+
+    async def scenario():
+        deltas: list[str] = []
+
+        async def on_delta(content: str) -> None:
+            deltas.append(content)
+
+        engine = object.__new__(CircuitTutorEngine)
+        result = await engine._answer_llm(
+            {
+                "llm": FakeCitationModel(),
+                "answer_messages": [{"role": "user", "content": "测试"}],
+                "hits": [_retrieval_hit(1), _retrieval_hit(2)],
+                "on_delta": on_delta,
+            }
+        )
+        return result, "".join(deltas)
+
+    result, streamed = asyncio.run(scenario())
+
+    assert streamed == result["response"]
+    assert "模型错误清单" not in streamed
+    assert streamed.count("### 检索依据") == 1
+    assert result["cited_sources"][0]["citation_index"] == 2
+
+
+def test_contextual_followup_reuses_latest_attachment_and_history_for_retrieval():
+    attachment_id = "a" * 32
+    history = [
+        {
+            "role": "user",
+            "content": "这个电路有什么问题",
+            "attachments": [{"id": attachment_id, "name": "circuit.png"}],
+        },
+        {
+            "role": "assistant",
+            "content": "图中信号由基极输入、集电极输出，发射极为公共端。",
+        },
+    ]
+
+    assert _contextual_attachment_ids("上述电路属于什么类型？", history) == [
+        attachment_id
+    ]
+    assert _contextual_attachment_ids("请解释共射放大电路", history) == []
+
+    engine = object.__new__(CircuitTutorEngine)
+    rewritten = asyncio.run(
+        engine._rewrite_query(
+            {
+                "message": "上述电路属于什么类型？",
+                "history": history,
+                "attachment_context": "",
+            }
+        )
+    )
+    assert "发射极为公共端" in rewritten["rewritten_query"]
+    assert "当前追问：上述电路属于什么类型" in rewritten["rewritten_query"]
 
 
 def test_sympy_verification_rejects_identifiers():
@@ -196,6 +314,55 @@ def test_router_uses_model_to_select_learning_plan_intent():
         "llm": FakeRouterModel(),
     }))
     assert routed["intent"] == "plan"
+
+
+def test_learning_plan_pace_scales_with_scope_and_only_uses_calendar_when_requested():
+    focused = _plan_schedule_guidance(
+        {"knowledge_points": ["静态工作点"], "prerequisite_points": []},
+        "帮我补习静态工作点",
+    )
+    broad = _plan_schedule_guidance(
+        {
+            "knowledge_points": [f"知识点{i}" for i in range(1, 8)],
+            "prerequisite_points": ["KCL", "KVL"],
+        },
+        "制定知识补全规划",
+    )
+    timed = _plan_schedule_guidance(
+        {"knowledge_points": ["静态工作点", "失真分析"]},
+        "请在两周内完成复习",
+    )
+
+    assert focused["scope_level"] == "聚焦"
+    assert focused["calendar_required"] is False
+    assert "2-4个学习课次" in focused["recommended_pace"]
+    assert broad["scope_level"] == "系统"
+    assert "3-6周" in broad["recommended_pace"]
+    assert timed["calendar_required"] is True
+
+
+def test_learning_goal_analysis_rejects_hallucinated_seven_day_horizon():
+    class FakePlannerModel:
+        model = "test-planner"
+
+        async def chat(self, *_args, **_kwargs):
+            return (
+                '{"goal":"掌握静态工作点","knowledge_points":["静态工作点"],'
+                '"prerequisite_points":[],"current_level":"基础",'
+                '"difficulty":"聚焦","time_horizon":"7天","constraints":[]}'
+            )
+
+    engine = object.__new__(CircuitTutorEngine)
+    profile = asyncio.run(engine._analyze_learning_goal({
+        "message": "帮我补习静态工作点",
+        "history": [],
+        "attachment_context": "",
+        "llm": FakePlannerModel(),
+    }))["plan_profile"]
+
+    assert profile["time_horizon"] == "未指定（不得假设固定天数）"
+    assert profile["schedule_guidance"]["calendar_required"] is False
+    assert profile["schedule_guidance"]["scope_point_count"] == 1
 
 
 def test_attachment_analysis_uses_request_selected_client():

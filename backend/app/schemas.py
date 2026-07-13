@@ -75,6 +75,7 @@ class MistakeCreateRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=96)
     content: str = Field(min_length=1, max_length=16000)
     agent: str = Field(default="学习 Agent", max_length=64)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=5)
     model_provider: Literal["ollama", "deepseek", "qwen", "custom"] = "ollama"
     model: str = Field(default="qwen3.5:2b", min_length=1, max_length=128)
     api_key: str = Field(default="", max_length=512)
@@ -87,6 +88,14 @@ class MistakeCreateRequest(BaseModel):
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", value):
             raise ValueError("标识仅允许字母、数字、连字符和下划线")
         return value
+
+    @field_validator("attachment_ids")
+    @classmethod
+    def safe_mistake_attachment_ids(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not re.fullmatch(r"[a-f0-9]{32}", value):
+                raise ValueError("附件标识不合法")
+        return list(dict.fromkeys(values))
 
     @field_validator("content", "agent", "model", "api_key", "base_url")
     @classmethod

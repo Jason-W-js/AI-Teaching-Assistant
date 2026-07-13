@@ -54,6 +54,7 @@ import {
 import MathMarkdown from '../components/MathMarkdown'
 import {
   addMistake,
+  AttachmentInfo,
   cancelKnowledgeBaseBuild,
   deleteKnowledgeBase,
   deleteMistake,
@@ -76,7 +77,7 @@ import {
   uploadKnowledgeFile,
   rebuildKnowledgeBase,
 } from '../lib/api'
-import { CHAT_MODEL, CHAT_MODEL_PROVIDER, ChatMode, useChatStore } from '../store/chatStore'
+import { CHAT_MODEL, CHAT_MODEL_PROVIDER, ChatMessage, ChatMode, useChatStore } from '../store/chatStore'
 
 const { TextArea } = Input
 type WorkspaceView = 'chat' | 'graph' | 'mistakes'
@@ -348,10 +349,12 @@ function Welcome({ onAsk }: { onAsk: (prompt: string, mode: ChatMode) => void })
 function SourceCard({
   source,
   index,
+  isCited,
   fallbackKnowledgeBase,
 }: {
   source: SourceInfo
   index: number
+  isCited: boolean
   fallbackKnowledgeBase: string
 }) {
   const page = source.page_start
@@ -383,10 +386,13 @@ function SourceCard({
       }}
     >
       <div className="source-card-top">
-        <span className={`source-type ${source.doc_type === 'question' ? 'question' : ''}`}>
-          {source.doc_type === 'question' ? <WandSparkles size={13} /> : <FileText size={13} />}
-          资料 {index + 1}
-        </span>
+        <div className="source-labels">
+          <span className={`source-type ${source.doc_type === 'question' ? 'question' : ''}`}>
+            {source.doc_type === 'question' ? <WandSparkles size={13} /> : <FileText size={13} />}
+            资料 {index + 1}
+          </span>
+          {isCited && <span className="source-cited-badge">已引用</span>}
+        </div>
         <span className="source-score">
           {source.historical ? '历史记录' : `${Math.round(source.score * 100)}%`}
         </span>
@@ -421,6 +427,7 @@ function SourceCard({
 
 function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate: () => void }) {
   const activeSources = useChatStore((state) => state.activeSources)
+  const activeCitedSources = useChatStore((state) => state.activeCitedSources)
   const activeMessageId = useChatStore((state) => state.activeMessageId)
   const knowledgeBase = useChatStore((state) => state.knowledgeBase)
   const defaultKnowledgeBase = useChatStore((state) => state.defaultKnowledgeBase)
@@ -433,14 +440,20 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
     || knowledgeBase
   const current = statuses.find((item) => item.id === activeKnowledgeBase)
   const quizContext = activeAssistant?.agent === '出题 Agent'
+  const citedSourceIds = new Set(activeCitedSources.map((source) => source.id))
+  const citedIndices = new Set(
+    activeCitedSources
+      .map((source) => source.citation_index)
+      .filter((index): index is number => typeof index === 'number'),
+  )
   return (
     <aside className="knowledge-panel">
       <div className="panel-heading">
         <div>
-          <span className="panel-kicker">{quizContext ? 'SOURCE PROBLEM' : 'RAG CONTEXT'}</span>
-          <h2>{quizContext ? '原题依据' : '检索依据'}</h2>
+          <span className="panel-kicker">{quizContext ? 'SOURCE PROBLEM' : 'RAG CANDIDATES'}</span>
+          <h2>{quizContext ? '原题依据' : '召回候选资料'}</h2>
         </div>
-        <Tooltip title={quizContext ? '出题 Agent 仅使用原题和会话历史，不调用知识库检索' : '检索结果已通过向量、BM25 与重排综合评分'}>
+        <Tooltip title={quizContext ? '出题 Agent 仅使用原题和会话历史，不调用知识库检索' : '这里展示本轮检索召回的候选资料；真正进入答案引用的资料会标记“已引用”'}>
           <HelpCircle size={17} />
         </Tooltip>
       </div>
@@ -466,6 +479,13 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
         </span>
       </div>
 
+      {!quizContext && activeSources.length > 0 && (
+        <div className={`source-usage-summary ${activeCitedSources.length ? '' : 'uncited'}`}>
+          <span>本轮召回 {activeSources.length} 条</span>
+          <strong>答案引用 {activeCitedSources.length} 条</strong>
+        </div>
+      )}
+
       <div className="source-list">
         {quizContext ? (
           <div className="source-empty quiz-reference-empty">
@@ -474,11 +494,12 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
             <p>首次出题读取当前原题；“再出一道”会沿用最近题目的拓扑、已知量和分项设问。</p>
           </div>
         ) : activeSources.length ? (
-          activeSources.slice(0, 5).map((source, index) => (
+          activeSources.map((source, index) => (
             <SourceCard
               key={`${source.id}-${index}`}
               source={source}
               index={index}
+              isCited={citedSourceIds.has(source.id) || citedIndices.has(index + 1)}
               fallbackKnowledgeBase={activeKnowledgeBase}
             />
           ))
@@ -638,7 +659,20 @@ function normalizeQuizTitle(content: string) {
   )
 }
 
-function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent: string) => void }) {
+function mistakeAttachmentsForMessage(messages: ChatMessage[], index: number): AttachmentInfo[] {
+  const message = messages[index]
+  if (message.attachments?.length) return message.attachments
+  if (message.role !== 'assistant') return []
+  for (let previousIndex = index - 1; previousIndex >= 0; previousIndex -= 1) {
+    const previous = messages[previousIndex]
+    if (previous.role !== 'user') continue
+    if (previous.attachments?.length) return previous.attachments
+    if (!/(上述|该电路|此电路|这个电路|该图|此图|上图|图中|刚才)/.test(previous.content)) return []
+  }
+  return []
+}
+
+function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent: string, attachments: AttachmentInfo[]) => void }) {
   const messages = useChatStore((state) => state.messages)
   const streaming = useChatStore((state) => state.streaming)
   const stage = useChatStore((state) => state.stage)
@@ -733,7 +767,11 @@ function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent:
               <div className="message-tools">
                 <button
                   type="button"
-                  onClick={() => onAddMistake(message.content, message.role === 'assistant' ? message.agent || '答疑 Agent' : '学生原题')}
+                  onClick={() => onAddMistake(
+                    message.content,
+                    message.role === 'assistant' ? message.agent || '答疑 Agent' : '学生原题',
+                    mistakeAttachmentsForMessage(messages, index),
+                  )}
                 >
                   <BookmarkPlus size={14} /> 加入错题本
                 </button>
@@ -968,6 +1006,17 @@ function MistakeBookView({
               <div className="mistake-card-head"><span>{item.agent}</span><small>{new Date(item.created_at).toLocaleDateString('zh-CN')}</small></div>
               <h2>{item.summary}</h2>
               <div className="mistake-points">{item.knowledge_points.map((point) => <Tag key={point}>{point}</Tag>)}</div>
+              {item.attachments?.length ? (
+                <div className="mistake-attachments">
+                  {item.attachments.map((attachment) => (
+                    <a key={attachment.id} href={attachment.url} target="_blank" rel="noreferrer">
+                      {attachment.kind === 'image'
+                        ? <img src={attachment.url} alt={attachment.name} />
+                        : <span><FileText size={16} />{attachment.name}</span>}
+                    </a>
+                  ))}
+                </div>
+              ) : null}
               <div className="mistake-content"><MathMarkdown content={item.content} /></div>
               <Popconfirm title="从错题本删除？" okText="删除" cancelText="取消" onConfirm={() => onDelete(item.id)}>
                 <button className="mistake-delete"><Trash2 size={14} /> 删除</button>
@@ -1340,9 +1389,9 @@ function StudentPageContent() {
     void send(prompt).then(() => refreshSessions())
   }
 
-  const saveMistake = async (content: string, agent: string) => {
+  const saveMistake = async (content: string, agent: string, attachments: AttachmentInfo[]) => {
     try {
-      const item = await addMistake(studentId, sessionId, content, agent, modelConfig)
+      const item = await addMistake(studentId, sessionId, content, agent, attachments, modelConfig)
       setMistakes((current) => [item, ...current.filter((existing) => existing.id !== item.id)])
       toast.success(`已加入错题本，并识别知识点：${item.knowledge_points.join('、')}`)
     } catch (error) {
@@ -1575,7 +1624,7 @@ function StudentPageContent() {
           <section className="learning-grid">
             <div className="chat-column">
               <div className="chat-scroll">
-                {messages.length === 0 ? <Welcome onAsk={ask} /> : <Conversation onAddMistake={(content, agent) => void saveMistake(content, agent)} />}
+                {messages.length === 0 ? <Welcome onAsk={ask} /> : <Conversation onAddMistake={(content, agent, attachments) => void saveMistake(content, agent, attachments)} />}
               </div>
               <ChatComposer onSend={(value) => ask(value)} />
             </div>

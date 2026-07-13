@@ -17,7 +17,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend.app.agents.workflow import CircuitTutorEngine
+from backend.app.agents.workflow import CircuitTutorEngine, _contextual_attachment_ids
 from backend.app.config import settings
 from backend.app.rag.manager import KnowledgeBaseManager
 from backend.app.rag.multimodal import BuildModelConfig
@@ -26,7 +26,7 @@ from backend.app.services.memory import ConversationMemory
 from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
-from backend.app.services.mistake_book import MistakeBook
+from backend.app.services.mistake_book import MistakeBook, related_mistake_attachments
 from backend.app.services.model_catalog import (
     QWEN_MODELS,
     QWEN_MODEL_OPTIONS,
@@ -399,12 +399,40 @@ async def _extract_mistake_metadata(payload: MistakeCreateRequest) -> tuple[list
 async def list_mistakes(student_id: str) -> dict[str, Any]:
     if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", student_id):
         raise HTTPException(status_code=400, detail="学生标识不合法")
-    return {"mistakes": await mistake_book.list(student_id)}
+    items = await mistake_book.list(student_id)
+    history_cache: dict[str, list[dict[str, Any]]] = {}
+    restored_items: list[dict[str, Any]] = []
+    for original in items:
+        item = dict(original)
+        if item.get("attachments"):
+            restored_items.append(item)
+            continue
+        session_id = str(item.get("session_id", ""))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", session_id):
+            restored_items.append(item)
+            continue
+        if session_id not in history_cache:
+            history = await memory.history(session_id)
+            history_cache[session_id] = await asyncio.to_thread(
+                attachments.enrich_history, session_id, history
+            )
+        recovered = related_mistake_attachments(
+            history_cache[session_id],
+            str(item.get("content", "")),
+            str(item.get("agent", "")),
+        )
+        if recovered:
+            item["attachments"] = recovered
+        restored_items.append(item)
+    return {"mistakes": restored_items}
 
 
 @app.post("/api/mistakes")
 async def add_mistake(payload: MistakeCreateRequest) -> dict[str, Any]:
-    knowledge_points, summary = await _extract_mistake_metadata(payload)
+    (knowledge_points, summary), resolved = await asyncio.gather(
+        _extract_mistake_metadata(payload),
+        attachments.resolve(payload.session_id, payload.attachment_ids),
+    )
     item = await mistake_book.add(
         student_id=payload.student_id,
         session_id=payload.session_id,
@@ -412,6 +440,7 @@ async def add_mistake(payload: MistakeCreateRequest) -> dict[str, Any]:
         agent=payload.agent,
         knowledge_points=knowledge_points,
         summary=summary,
+        attachments=resolved.items,
     )
     return {"ok": True, "mistake": item}
 
@@ -483,11 +512,19 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 },
             )
             history = await memory.recent(payload.session_id)
-            resolved = await attachments.resolve(payload.session_id, payload.attachment_ids)
             effective_message = payload.message or (
                 "请根据附件中的原题生成一道同类型新题。"
                 if payload.mode == "quiz"
                 else "请识别并解答附件中的电路题。"
+            )
+            inherited_attachment_ids = (
+                _contextual_attachment_ids(effective_message, history)
+                if not payload.attachment_ids
+                else []
+            )
+            resolved = await attachments.resolve(
+                payload.session_id,
+                payload.attachment_ids or inherited_attachment_ids,
             )
             attachment_names = [item["name"] for item in resolved.items]
             await memory.append(
@@ -495,7 +532,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 "user",
                 effective_message,
                 {
-                    "attachments": resolved.items,
+                    "attachments": resolved.items if payload.attachment_ids else [],
                     "knowledge_base": payload.knowledge_base,
                 },
             )
@@ -535,6 +572,10 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 {**source, "knowledge_base": payload.knowledge_base}
                 for source in result.sources
             ]
+            persisted_cited_sources = [
+                {**source, "knowledge_base": payload.knowledge_base}
+                for source in result.cited_sources
+            ]
             yield sse(
                 "meta",
                 {
@@ -543,6 +584,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     "provider": selected_provider,
                     "model": selected_model,
                     "sources": persisted_sources,
+                    "cited_sources": persisted_cited_sources,
                     "verification": result.verification,
                 },
             )
@@ -560,6 +602,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     "model": selected_model,
                     "knowledge_base": payload.knowledge_base,
                     "sources": persisted_sources,
+                    "cited_sources": persisted_cited_sources,
                 },
             )
             yield sse("done", {"ok": True})
