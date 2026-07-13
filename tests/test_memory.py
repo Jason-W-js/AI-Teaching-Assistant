@@ -26,7 +26,12 @@ def test_local_memory_lists_and_restores_conversations(tmp_path):
             "student-first",
             "assistant",
             "戴维南定理说明……",
-            {"agent": "答疑 Agent", "provider": "qwen", "model": "qwen-plus"},
+            {
+                "agent": "答疑 Agent",
+                "provider": "qwen",
+                "model": "qwen-plus",
+                "sources": [{"id": "chunk-1", "source": "lesson.pdf"}],
+            },
         )
         sessions = await memory.list_sessions()
         messages = await memory.history("student-first")
@@ -36,6 +41,7 @@ def test_local_memory_lists_and_restores_conversations(tmp_path):
     assert sessions[0]["session_id"] == "student-first"
     assert sessions[0]["title"] == "请解释戴维南定理"
     assert messages[-1]["model"] == "qwen-plus"
+    assert messages[-1]["sources"][0]["source"] == "lesson.pdf"
 
 
 def test_local_memory_deletes_history_file_index_and_cache(tmp_path):

@@ -7,6 +7,7 @@ import json
 import mimetypes
 import re
 import shutil
+from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,19 @@ class AttachmentStore:
 
     def _session_dir(self, session_id: str) -> Path:
         return self.root / self.validate_session_id(session_id)
+
+    @staticmethod
+    def _public_meta(meta: dict[str, Any]) -> dict[str, Any]:
+        session_id = str(meta["session_id"])
+        attachment_id = str(meta["id"])
+        return {
+            "id": attachment_id,
+            "name": str(meta["name"]),
+            "content_type": str(meta["content_type"]),
+            "size": int(meta["size"]),
+            "kind": str(meta["kind"]),
+            "url": f"/api/attachments/{attachment_id}?session_id={session_id}",
+        }
 
     async def save(
         self,
@@ -102,7 +116,7 @@ class AttachmentStore:
         (session_dir / f"{attachment_id}.json").write_text(
             json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
         )
-        return {key: value for key, value in meta.items() if key != "extracted_text"}
+        return self._public_meta(meta)
 
     def _extract_text(self, path: Path, suffix: str) -> str:
         if suffix in {".txt", ".md"}:
@@ -156,8 +170,7 @@ class AttachmentStore:
         items: list[dict[str, Any]] = []
         for attachment_id in attachment_ids[: settings.max_chat_attachments]:
             meta, file_path = self._load_meta(session_id, attachment_id)
-            public_meta = {key: value for key, value in meta.items() if key != "extracted_text"}
-            items.append(public_meta)
+            items.append(self._public_meta(meta))
             if meta["kind"] == "image":
                 images.append(self._image_base64(file_path))
             elif meta.get("extracted_text"):
@@ -185,6 +198,67 @@ class AttachmentStore:
 
     def file_for_response(self, session_id: str, attachment_id: str) -> tuple[dict[str, Any], Path]:
         return self._load_meta(session_id, attachment_id)
+
+    def list_public(self, session_id: str) -> list[dict[str, Any]]:
+        session_dir = self._session_dir(session_id)
+        if not session_dir.exists():
+            return []
+        items: list[tuple[float, dict[str, Any]]] = []
+        for meta_path in session_dir.glob("*.json"):
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                file_path = session_dir / f"{meta['id']}{meta['suffix']}"
+                if file_path.is_file():
+                    items.append((meta_path.stat().st_mtime, self._public_meta(meta)))
+            except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError):
+                continue
+        return [item for _, item in sorted(items, key=lambda value: value[0])]
+
+    def enrich_history(
+        self, session_id: str, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Restore attachment URLs, including legacy messages that only kept names."""
+
+        available = self.list_public(session_id)
+        by_id = {str(item["id"]): item for item in available}
+        by_name: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for item in available:
+            by_name[str(item["name"])].append(item)
+        used_legacy_ids: set[str] = set()
+        restored: list[dict[str, Any]] = []
+        for original in messages:
+            message = dict(original)
+            stored_attachments = message.get("attachments")
+            resolved: list[dict[str, Any]] = []
+            if isinstance(stored_attachments, list):
+                message.pop("attachments", None)
+                for stored in stored_attachments:
+                    if not isinstance(stored, dict):
+                        continue
+                    current = by_id.get(str(stored.get("id", "")))
+                    if current:
+                        resolved.append(current)
+            if not resolved and message.get("role") == "user":
+                content = str(message.get("content", ""))
+                marker = re.search(r"(?:\n)?\[附件：([^\]]+)\]\s*$", content)
+                if marker:
+                    for name in (part.strip() for part in marker.group(1).split("、")):
+                        candidate = next(
+                            (
+                                item for item in by_name.get(name, [])
+                                if str(item["id"]) not in used_legacy_ids
+                            ),
+                            None,
+                        )
+                        if candidate:
+                            resolved.append(candidate)
+                            used_legacy_ids.add(str(candidate["id"]))
+                    if resolved:
+                        message["content"] = content[:marker.start()].rstrip()
+            if resolved:
+                message["attachments"] = resolved
+            restored.append(message)
+        return restored
 
     async def delete_session(self, session_id: str) -> bool:
         return await asyncio.to_thread(self._delete_session_sync, session_id)

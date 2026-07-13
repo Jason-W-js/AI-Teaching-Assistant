@@ -15,6 +15,8 @@ export type SourceInfo = {
   graph_score?: number
   image_score?: number
   rerank_score?: number
+  knowledge_base?: string
+  historical?: boolean
 }
 
 export type KBStatus = {
@@ -127,6 +129,9 @@ export type StoredMessage = {
   agent?: string
   provider?: ModelProviderId
   model?: string
+  knowledge_base?: string
+  attachments?: AttachmentInfo[]
+  sources?: SourceInfo[]
 }
 
 type SSECallbacks = {
@@ -257,6 +262,16 @@ export async function fetchKnowledgeGraph(knowledgeBase: string): Promise<Knowle
   const result = await response.json()
   if (!response.ok) throw new Error(result.detail || '知识图谱读取失败')
   return result
+}
+
+export function knowledgeBaseSourceUrl(
+  knowledgeBase: string,
+  source: string,
+  page?: number | null,
+): string {
+  const query = new URLSearchParams({ source })
+  const url = `/api/kb/${encodeURIComponent(knowledgeBase)}/source?${query.toString()}`
+  return page ? `${url}#page=${page}` : url
 }
 
 export async function fetchMistakes(studentId: string): Promise<MistakeItem[]> {

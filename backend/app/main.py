@@ -164,6 +164,22 @@ async def knowledge_graph(knowledge_base: str) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/api/kb/{knowledge_base}/source")
+async def knowledge_base_source(knowledge_base: str, source: str) -> FileResponse:
+    try:
+        path = knowledge_bases.source_file(knowledge_base, source)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        path,
+        media_type=mimetypes.guess_type(path.name)[0] or "application/octet-stream",
+        filename=path.name,
+        content_disposition_type="inline",
+    )
+
+
 @app.post("/api/kb/rebuild")
 async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[str, Any]:
     api_key = payload.api_key
@@ -241,7 +257,9 @@ async def conversation_session(session_id: str) -> dict[str, Any]:
         attachments.validate_session_id(session_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"session_id": session_id, "messages": await memory.history(session_id)}
+    messages = await memory.history(session_id)
+    restored = await asyncio.to_thread(attachments.enrich_history, session_id, messages)
+    return {"session_id": session_id, "messages": restored}
 
 
 @app.delete("/api/sessions/{session_id}")
@@ -452,10 +470,15 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 else "请识别并解答附件中的电路题。"
             )
             attachment_names = [item["name"] for item in resolved.items]
-            memory_message = effective_message
-            if attachment_names:
-                memory_message += f"\n[附件：{'、'.join(attachment_names)}]"
-            await memory.append(payload.session_id, "user", memory_message)
+            await memory.append(
+                payload.session_id,
+                "user",
+                effective_message,
+                {
+                    "attachments": resolved.items,
+                    "knowledge_base": payload.knowledge_base,
+                },
+            )
             event_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
             streamed_answer = False
 
@@ -488,6 +511,10 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 except asyncio.TimeoutError:
                     continue
             result = await task
+            persisted_sources = [
+                {**source, "knowledge_base": payload.knowledge_base}
+                for source in result.sources
+            ]
             yield sse(
                 "meta",
                 {
@@ -495,7 +522,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     "agent": result.agent,
                     "provider": payload.model_provider,
                     "model": payload.model,
-                    "sources": result.sources,
+                    "sources": persisted_sources,
                     "verification": result.verification,
                 },
             )
@@ -511,6 +538,8 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     "agent": result.agent,
                     "provider": payload.model_provider,
                     "model": payload.model,
+                    "knowledge_base": payload.knowledge_base,
+                    "sources": persisted_sources,
                 },
             )
             yield sse("done", {"ok": True})
@@ -571,7 +600,6 @@ async def upload_chat_attachment(
         )
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    item["url"] = f"/api/attachments/{item['id']}?session_id={session_id}"
     return {"ok": True, "attachment": item}
 
 

@@ -5,6 +5,7 @@ import io
 from dataclasses import replace
 
 import fitz
+import pytest
 from PIL import Image, ImageDraw
 
 from backend.app.rag import manager as manager_module
@@ -312,6 +313,21 @@ def test_delete_knowledge_base_removes_index_and_resources(tmp_path, monkeypatch
     assert not resource_dir.exists()
     assert not index_dir.exists()
     assert manager.statuses() == []
+
+
+def test_source_file_only_opens_files_inside_knowledge_base(tmp_path, monkeypatch):
+    resource_dir = tmp_path / "resources"
+    resource_dir.mkdir()
+    lesson = resource_dir / "lesson.pdf"
+    lesson.write_bytes(b"pdf")
+    manager = KnowledgeBaseManager()
+    monkeypatch.setattr(manager, "resource_dir", lambda _knowledge_base: resource_dir)
+
+    assert manager.source_file("course", "lesson.pdf") == lesson
+    with pytest.raises(ValueError, match="名称不合法"):
+        manager.source_file("course", "../secret.txt")
+    with pytest.raises(FileNotFoundError, match="不存在"):
+        manager.source_file("course", "missing.pdf")
 
 
 def test_system_default_delete_preserves_custom_knowledge_base_resources(tmp_path, monkeypatch):

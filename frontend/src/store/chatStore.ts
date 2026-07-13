@@ -13,6 +13,7 @@ export type ChatMessage = {
   attachments?: AttachmentInfo[]
   model?: string
   provider?: ModelProviderId
+  knowledgeBase?: string
 }
 
 export type PendingAttachment = {
@@ -93,6 +94,27 @@ function getDefaultKnowledgeBase(): string {
 
 const initialKnowledgeBase = getDefaultKnowledgeBase()
 
+function legacySourcesFromContent(content: string): SourceInfo[] {
+  const sources: SourceInfo[] = []
+  const pattern = /^-\s+\[资料(\d+)\]\s+(.+?)\s+·\s+(.+?)\s+·\s+第\s*(\d+)(?:[–-](\d+))?\s*页\s*$/gm
+  for (const match of content.matchAll(pattern)) {
+    const pageStart = Number(match[4])
+    const pageEnd = Number(match[5] || match[4])
+    sources.push({
+      id: `history-source-${match[1]}-${match[2]}-${pageStart}`,
+      source: match[2].trim(),
+      chapter: match[3].trim(),
+      section: match[3].trim(),
+      page_start: pageStart,
+      page_end: pageEnd,
+      score: 0,
+      doc_type: 'textbook',
+      historical: true,
+    })
+  }
+  return sources
+}
+
 type ChatState = {
   studentId: string
   sessionId: string
@@ -105,6 +127,7 @@ type ChatState = {
   stage: string
   stageAgent: string
   activeSources: SourceInfo[]
+  activeMessageId?: string
   pendingAttachments: PendingAttachment[]
   controller?: AbortController
   setMode: (mode: ChatMode) => void
@@ -114,6 +137,7 @@ type ChatState = {
   setModelConfig: (config: ModelConfig) => void
   addAttachments: (files: File[]) => Promise<void>
   removeAttachment: (localId: string) => void
+  activateMessage: (messageId: string) => void
   loadSession: (sessionId: string, messages: StoredMessage[]) => void
   send: (message: string) => Promise<void>
   stop: () => void
@@ -132,6 +156,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   stage: '',
   stageAgent: '',
   activeSources: [],
+  activeMessageId: undefined,
   pendingAttachments: [],
   setMode: (mode) => set({ mode }),
   setKnowledgeBase: (knowledgeBase) => set({ knowledgeBase }),
@@ -205,24 +230,43 @@ export const useChatStore = create<ChatState>((set, get) => ({
   removeAttachment: (localId) => set((state) => ({
     pendingAttachments: state.pendingAttachments.filter((item) => item.localId !== localId),
   })),
+  activateMessage: (messageId) => set((state) => {
+    if (state.activeMessageId === messageId) return state
+    const message = state.messages.find((item) => item.id === messageId)
+    if (!message || message.role !== 'assistant') return state
+    return {
+      activeMessageId: messageId,
+      activeSources: message.sources || [],
+    }
+  }),
   loadSession: (sessionId, storedMessages) => {
     get().controller?.abort()
     localStorage.setItem(sessionKey, sessionId)
-    const messages = storedMessages.map<ChatMessage>((item, index) => ({
-      id: `history-${item.created_at}-${index}`,
-      role: item.role,
-      content: item.content,
-      agent: item.agent,
-      provider: item.provider,
-      model: item.model,
-    }))
+    const messages = storedMessages.map<ChatMessage>((item, index) => {
+      const sources = item.sources?.length
+        ? item.sources
+        : legacySourcesFromContent(item.content)
+      return {
+        id: `history-${item.created_at}-${index}`,
+        role: item.role,
+        content: item.content,
+        agent: item.agent,
+        provider: item.provider,
+        model: item.model,
+        knowledgeBase: item.knowledge_base,
+        attachments: item.attachments || [],
+        sources,
+      }
+    })
+    const latestAssistant = [...messages].reverse().find((item) => item.role === 'assistant')
     set({
       sessionId,
       messages,
       streaming: false,
       stage: '',
       stageAgent: '',
-      activeSources: [],
+      activeSources: latestAssistant?.sources || [],
+      activeMessageId: latestAssistant?.id,
       pendingAttachments: [],
       controller: undefined,
     })
@@ -245,6 +289,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       role: 'user',
       content: message,
       attachments: readyAttachments,
+      knowledgeBase: get().knowledgeBase,
     }
     const assistantId = crypto.randomUUID()
     const selectedModel = get().modelConfig
@@ -254,6 +299,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       content: '',
       model: selectedModel.model,
       provider: selectedModel.provider,
+      knowledgeBase: get().knowledgeBase,
     }
     const controller = new AbortController()
     set((state) => ({
@@ -262,6 +308,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stage: `正在连接 ${selectedModel.model}…`,
       stageAgent: '系统',
       activeSources: [],
+      activeMessageId: assistantId,
       pendingAttachments: [],
       controller,
     }))
@@ -282,10 +329,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
           onStatus: (data) => set({ stage: data.message, stageAgent: data.agent }),
           onMeta: (data) => {
             set((state) => ({
-              activeSources: data.sources || [],
+              activeSources:
+                state.activeMessageId === assistantId
+                  ? data.sources || []
+                  : state.activeSources,
               messages: state.messages.map((item) =>
                 item.id === assistantId
-                  ? { ...item, agent: data.agent, provider: data.provider, model: data.model, sources: data.sources }
+                  ? {
+                      ...item,
+                      agent: data.agent,
+                      provider: data.provider,
+                      model: data.model,
+                      sources: data.sources,
+                    }
                   : item,
               ),
             }))
@@ -357,6 +413,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       streaming: false,
       stage: '',
       activeSources: [],
+      activeMessageId: undefined,
       pendingAttachments: [],
       controller: undefined,
     })

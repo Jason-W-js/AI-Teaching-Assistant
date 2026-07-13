@@ -71,6 +71,15 @@ class KnowledgeBaseManager:
     def index_dir(self, knowledge_base: str) -> Path:
         return settings.vector_stores_dir / self.validate_id(knowledge_base)
 
+    def source_file(self, knowledge_base: str, source_name: str) -> Path:
+        if not source_name or Path(source_name).name != source_name:
+            raise ValueError("资料名称不合法")
+        root = self.resource_dir(knowledge_base).resolve()
+        target = (root / source_name).resolve()
+        if target.parent != root or not target.is_file():
+            raise FileNotFoundError(f"资料 {source_name} 不存在")
+        return target
+
     def load_existing(self) -> None:
         settings.vector_stores_dir.mkdir(parents=True, exist_ok=True)
         for index_dir in settings.vector_stores_dir.iterdir():

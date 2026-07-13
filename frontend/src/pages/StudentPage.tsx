@@ -30,6 +30,7 @@ import {
   Cpu,
   Database,
   FileText,
+  ExternalLink,
   GraduationCap,
   HelpCircle,
   Layers3,
@@ -64,6 +65,7 @@ import {
   fetchSession,
   fetchSessions,
   KBStatus,
+  knowledgeBaseSourceUrl,
   KnowledgeGraph,
   ModelCatalog,
   ModelConfig,
@@ -343,20 +345,51 @@ function Welcome({ onAsk }: { onAsk: (prompt: string, mode: ChatMode) => void })
   )
 }
 
-function SourceCard({ source, index }: { source: SourceInfo; index: number }) {
+function SourceCard({
+  source,
+  index,
+  fallbackKnowledgeBase,
+}: {
+  source: SourceInfo
+  index: number
+  fallbackKnowledgeBase: string
+}) {
   const page = source.page_start
     ? source.page_start === source.page_end
       ? `第 ${source.page_start} 页`
       : `第 ${source.page_start}–${source.page_end} 页`
     : '结构化题库'
+  const openSource = () => {
+    const knowledgeBase = source.knowledge_base || fallbackKnowledgeBase
+    if (!knowledgeBase) return
+    window.open(
+      knowledgeBaseSourceUrl(knowledgeBase, source.source, source.page_start),
+      '_blank',
+      'noopener,noreferrer',
+    )
+  }
   return (
-    <article className="source-card">
+    <article
+      className="source-card source-card-openable"
+      role="link"
+      tabIndex={0}
+      aria-label={`查看完整资料 ${source.source}`}
+      onClick={openSource}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          openSource()
+        }
+      }}
+    >
       <div className="source-card-top">
         <span className={`source-type ${source.doc_type === 'question' ? 'question' : ''}`}>
           {source.doc_type === 'question' ? <WandSparkles size={13} /> : <FileText size={13} />}
           资料 {index + 1}
         </span>
-        <span className="source-score">{Math.round(source.score * 100)}%</span>
+        <span className="source-score">
+          {source.historical ? '历史记录' : `${Math.round(source.score * 100)}%`}
+        </span>
       </div>
       <strong>{source.section || source.chapter || source.source}</strong>
       <p>{source.source}</p>
@@ -364,33 +397,42 @@ function SourceCard({ source, index }: { source: SourceInfo; index: number }) {
       {source.knowledge_tags?.length ? (
         <div className="source-tags">{source.knowledge_tags.slice(0, 4).map((tag) => <span key={tag}>{tag}</span>)}</div>
       ) : null}
-      <div className="source-score-grid" aria-label="检索评分组成">
-        {[
-          ['向量', source.vector_score],
-          ['关键词', source.bm25_score],
-          ['图谱', source.graph_score],
-        ].map(([label, score]) => (
-          <div key={String(label)}>
-            <span>{label}</span>
-            <i><b style={{ width: `${Math.max(0, Math.min(100, Number(score || 0) * 100))}%` }} /></i>
-          </div>
-        ))}
+      {!source.historical && (
+        <div className="source-score-grid" aria-label="检索评分组成">
+          {[
+            ['向量', source.vector_score],
+            ['关键词', source.bm25_score],
+            ['图谱', source.graph_score],
+          ].map(([label, score]) => (
+            <div key={String(label)}>
+              <span>{label}</span>
+              <i><b style={{ width: `${Math.max(0, Math.min(100, Number(score || 0) * 100))}%` }} /></i>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="source-meta">
+        <span>{page}</span>
+        <span className="source-open-label"><ExternalLink size={12} /> 查看全文</span>
       </div>
-      <div className="source-meta"><span>{page}</span><span>已重排</span></div>
     </article>
   )
 }
 
 function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate: () => void }) {
   const activeSources = useChatStore((state) => state.activeSources)
+  const activeMessageId = useChatStore((state) => state.activeMessageId)
   const knowledgeBase = useChatStore((state) => state.knowledgeBase)
   const defaultKnowledgeBase = useChatStore((state) => state.defaultKnowledgeBase)
   const modelProvider = useChatStore((state) => state.modelConfig.provider)
-  const mode = useChatStore((state) => state.mode)
   const messages = useChatStore((state) => state.messages)
-  const current = statuses.find((item) => item.id === knowledgeBase)
-  const latestAssistant = [...messages].reverse().find((item) => item.role === 'assistant')
-  const quizContext = mode === 'quiz' || latestAssistant?.agent === '出题 Agent'
+  const activeAssistant = messages.find((item) => item.id === activeMessageId)
+    || [...messages].reverse().find((item) => item.role === 'assistant')
+  const activeKnowledgeBase = activeAssistant?.knowledgeBase
+    || activeSources[0]?.knowledge_base
+    || knowledgeBase
+  const current = statuses.find((item) => item.id === activeKnowledgeBase)
+  const quizContext = activeAssistant?.agent === '出题 Agent'
   return (
     <aside className="knowledge-panel">
       <div className="panel-heading">
@@ -406,7 +448,7 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
       <div className="kb-summary-card">
         <span className="kb-icon">{quizContext ? <BrainCircuit size={18} /> : <Database size={18} />}</span>
         <div>
-          <strong>{quizContext ? '原题驱动出题' : knowledgeBase === defaultKnowledgeBase ? '默认课程知识库' : knowledgeBase}</strong>
+          <strong>{quizContext ? '原题驱动出题' : activeKnowledgeBase === defaultKnowledgeBase ? '默认课程知识库' : activeKnowledgeBase}</strong>
           <span>{quizContext ? '会话上下文 · 不检索知识库' : `${current?.chunks || 0} 个文本块 · ${current?.documents || 0} 份资料`}</span>
         </div>
         <span className={`kb-state ${quizContext ? 'ready' : current?.state || 'missing'}`}>
@@ -433,7 +475,12 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
           </div>
         ) : activeSources.length ? (
           activeSources.slice(0, 5).map((source, index) => (
-            <SourceCard key={`${source.id}-${index}`} source={source} index={index} />
+            <SourceCard
+              key={`${source.id}-${index}`}
+              source={source}
+              index={index}
+              fallbackKnowledgeBase={activeKnowledgeBase}
+            />
           ))
         ) : (
           <div className="source-empty">
@@ -596,16 +643,53 @@ function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent:
   const streaming = useChatStore((state) => state.streaming)
   const stage = useChatStore((state) => state.stage)
   const stageAgent = useChatStore((state) => state.stageAgent)
+  const activeMessageId = useChatStore((state) => state.activeMessageId)
+  const activateMessage = useChatStore((state) => state.activateMessage)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages, stage])
 
+  useEffect(() => {
+    const container = endRef.current?.closest('.chat-scroll') as HTMLElement | null
+    if (!container) return
+    let frame = 0
+    const updateActiveMessage = () => {
+      window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        const rows = Array.from(
+          container.querySelectorAll<HTMLElement>('.message-row.assistant[data-message-id]'),
+        )
+        if (!rows.length) return
+        const containerRect = container.getBoundingClientRect()
+        const focusY = containerRect.top + containerRect.height * 0.42
+        const closest = rows.reduce((best, row) => {
+          const rect = row.getBoundingClientRect()
+          const distance = Math.abs(rect.top + Math.min(rect.height / 2, 140) - focusY)
+          return distance < best.distance ? { row, distance } : best
+        }, { row: rows[0], distance: Number.POSITIVE_INFINITY })
+        const messageId = closest.row.dataset.messageId
+        if (messageId) activateMessage(messageId)
+      })
+    }
+    container.addEventListener('scroll', updateActiveMessage, { passive: true })
+    updateActiveMessage()
+    return () => {
+      container.removeEventListener('scroll', updateActiveMessage)
+      window.cancelAnimationFrame(frame)
+    }
+  }, [messages.length, activateMessage])
+
   return (
     <div className="conversation">
       {messages.map((message, index) => (
-        <div key={message.id} className={`message-row ${message.role}`}>
+        <div
+          key={message.id}
+          className={`message-row ${message.role} ${message.id === activeMessageId ? 'active-evidence-message' : ''}`}
+          data-message-id={message.id}
+          onClick={() => message.role === 'assistant' && activateMessage(message.id)}
+        >
           {message.role === 'assistant' && (
             <span className="assistant-avatar"><LogoMark /></span>
           )}

@@ -200,6 +200,8 @@ button { color: inherit; }
 .kb-state.error, .kb-state.missing, .kb-state.cancelled { color: #996369; background: #f6e5e7; }
 .source-list { flex: 1; min-height: 0; margin-top: 15px; padding-right: 3px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #d0dcd9 transparent; }
 .source-card { padding: 12px; margin-bottom: 9px; background: #fff; border: 1px solid #e0e8e5; border-radius: 11px; box-shadow: 0 3px 12px rgba(33,64,61,.025); }
+.source-card-openable { cursor: pointer; transition: border-color .18s ease, box-shadow .18s ease, transform .18s ease; }
+.source-card-openable:hover, .source-card-openable:focus-visible { border-color: #79bbb2; outline: none; box-shadow: 0 8px 22px rgba(18,100,95,.1); transform: translateY(-1px); }
 .source-card-top { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
 .source-type { display: inline-flex; align-items: center; gap: 4px; color: #56877f; font-size: 8px; font-weight: 800; text-transform: uppercase; }
 .source-type.question { color: #bd682f; }
@@ -214,6 +216,7 @@ button { color: inherit; }
 .source-score-grid i { height: 3px; overflow: hidden; background: #edf1f0; border-radius: 99px; }
 .source-score-grid b { display: block; height: 100%; background: linear-gradient(90deg, #68b9ad, #16786f); border-radius: inherit; }
 .source-meta { display: flex; align-items: center; justify-content: space-between; padding-top: 8px; color: #8ba09d; border-top: 1px dashed #e2e9e7; font-size: 8px; }
+.source-open-label { display: inline-flex; gap: 4px; align-items: center; color: #16766e; font-weight: 650; }
 .source-empty { height: 100%; min-height: 200px; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 20px; color: #90a19f; text-align: center; }
 .source-empty > span { display: grid; place-items: center; width: 48px; height: 48px; color: #79a69f; background: #eff6f3; border-radius: 15px; }
 .source-empty strong { margin-top: 13px; color: #54716f; font-size: 12px; }
@@ -278,6 +281,7 @@ button { color: inherit; }
 .message-file-attachment { display: inline-flex; align-items: center; gap: 7px; max-width: 240px; padding: 8px 10px; color: #e7f6f3; text-decoration: none; background: rgba(0,0,0,.12); border: 1px solid rgba(255,255,255,.16); border-radius: 9px; }
 .message-file-attachment span { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .message-row.assistant .message-bubble { padding: 4px 4px 4px 0; }
+.message-row.assistant.active-evidence-message .message-bubble { border-radius: 10px; box-shadow: -3px 0 0 #55aaa0; }
 .message-bubble.failed { color: #a24e42; }
 .message-tools { display: flex; margin-top: 8px; }
 .message-tools button { display: inline-flex; align-items: center; gap: 5px; padding: 4px 7px; color: #718b88; background: transparent; border: 0; border-radius: 6px; font-size: 10px; cursor: pointer; }
