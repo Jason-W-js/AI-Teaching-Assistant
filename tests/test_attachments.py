@@ -1,4 +1,7 @@
 import asyncio
+import base64
+
+import fitz
 
 from backend.app.services.attachments import AttachmentStore
 
@@ -17,6 +20,28 @@ def test_text_attachment_persists_and_resolves(tmp_path):
     assert resolved.images == []
     assert resolved.items[0]["name"] == "question.md"
     assert resolved.items[0]["url"].startswith("/api/attachments/")
+
+
+def test_pdf_attachment_pages_are_rendered_for_vision_recognition(tmp_path):
+    document = fitz.open()
+    page = document.new_page(width=320, height=240)
+    page.insert_text((30, 50), "R1 = 10 ohm; calculate current")
+    pdf_bytes = document.tobytes()
+    document.close()
+
+    store = AttachmentStore()
+    store.root = tmp_path
+    meta = store._save_sync(
+        session_id="student-pdf",
+        filename="circuit.pdf",
+        content_type="application/pdf",
+        data=pdf_bytes,
+    )
+    resolved = store._resolve_sync("student-pdf", [meta["id"]])
+
+    assert "calculate current" in resolved.text
+    assert len(resolved.images) == 1
+    assert base64.b64decode(resolved.images[0]).startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_history_restores_new_and_legacy_attachment_metadata(tmp_path):

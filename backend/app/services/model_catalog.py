@@ -35,7 +35,8 @@ QWEN_CHAT_DISABLED_REASONS = {
     if option.get("disabled")
 }
 
-QWEN_VL_FALLBACK_MODEL = "qwen3-vl-flash"
+QWEN_CHAT_MODEL = "qwen3-vl-flash"
+QWEN_VL_FALLBACK_MODEL = QWEN_CHAT_MODEL
 QWEN_VL_FALLBACK_ALIASES = {
     "qwen3-vl-8b-instruct",
     "qwen3-vl-embedding",

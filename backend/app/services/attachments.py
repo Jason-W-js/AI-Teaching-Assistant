@@ -7,6 +7,7 @@ import json
 import mimetypes
 import re
 import shutil
+import zipfile
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -166,6 +167,7 @@ class AttachmentStore:
 
     def _resolve_sync(self, session_id: str, attachment_ids: list[str]) -> ResolvedAttachments:
         images: list[str] = []
+        document_image_count = 0
         text_parts: list[str] = []
         items: list[dict[str, Any]] = []
         for attachment_id in attachment_ids[: settings.max_chat_attachments]:
@@ -173,10 +175,20 @@ class AttachmentStore:
             items.append(self._public_meta(meta))
             if meta["kind"] == "image":
                 images.append(self._image_base64(file_path))
-            elif meta.get("extracted_text"):
-                text_parts.append(
-                    f"[附件：{meta['name']}]\n{meta['extracted_text']}"
+            else:
+                if meta.get("extracted_text"):
+                    text_parts.append(
+                        f"[附件：{meta['name']}]\n{meta['extracted_text']}"
+                    )
+                remaining = max(
+                    0, settings.max_chat_document_images - document_image_count
                 )
+                if remaining:
+                    document_images = self._document_images(
+                        file_path, str(meta["suffix"]), remaining
+                    )
+                    images.extend(document_images)
+                    document_image_count += len(document_images)
         return ResolvedAttachments(
             text="\n\n".join(text_parts)[:32000],
             images=images,
@@ -195,6 +207,56 @@ class AttachmentStore:
                 image = image.convert("RGB")
             image.save(buffer, format="JPEG", quality=90, optimize=True)
             return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+    @staticmethod
+    def _document_images(path: Path, suffix: str, limit: int) -> list[str]:
+        """Render document visuals so formulas and circuit diagrams reach the VLM."""
+
+        if suffix == ".pdf":
+            document = fitz.open(path)
+            try:
+                rendered: list[str] = []
+                for page_index in range(min(document.page_count, limit)):
+                    pixmap = document[page_index].get_pixmap(
+                        matrix=fitz.Matrix(1.35, 1.35), alpha=False
+                    )
+                    rendered.append(
+                        base64.b64encode(pixmap.tobytes("png")).decode("ascii")
+                    )
+                return rendered
+            finally:
+                document.close()
+        if suffix not in {".docx", ".xlsx"}:
+            return []
+
+        prefix = "word/media/" if suffix == ".docx" else "xl/media/"
+        rendered: list[str] = []
+        try:
+            with zipfile.ZipFile(path) as archive:
+                members = sorted(
+                    member
+                    for member in archive.infolist()
+                    if member.filename.startswith(prefix)
+                    and not member.is_dir()
+                    and member.file_size <= 8 * 1024 * 1024
+                )
+                for member in members[:limit]:
+                    try:
+                        with Image.open(io.BytesIO(archive.read(member))) as image:
+                            image.load()
+                            image.thumbnail((1800, 1800))
+                            if image.mode not in {"RGB", "L"}:
+                                image = image.convert("RGB")
+                            buffer = io.BytesIO()
+                            image.save(buffer, format="JPEG", quality=88, optimize=True)
+                            rendered.append(
+                                base64.b64encode(buffer.getvalue()).decode("ascii")
+                            )
+                    except (OSError, ValueError):
+                        continue
+        except (OSError, zipfile.BadZipFile):
+            return []
+        return rendered
 
     def file_for_response(self, session_id: str, attachment_id: str) -> tuple[dict[str, Any], Path]:
         return self._load_meta(session_id, attachment_id)

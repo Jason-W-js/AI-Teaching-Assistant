@@ -1,10 +1,12 @@
 import asyncio
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
+import backend.app.main as main_module
 from backend.app.agents.workflow import CircuitTutorEngine
 from backend.app.schemas import ChatRequest
 from backend.app.services.ollama_client import OllamaClient
@@ -16,10 +18,35 @@ from backend.app.services.model_catalog import (
 )
 
 
-def test_chat_request_defaults_to_required_local_qwen():
+def test_chat_request_defaults_to_qwen3_vl_flash():
     request = ChatRequest(session_id="student-demo", message="测试")
-    assert request.model_provider == "ollama"
-    assert request.model == "qwen3.5:2b"
+    assert request.model_provider == "qwen"
+    assert request.model == "qwen3-vl-flash"
+
+
+def test_student_chat_overrides_previous_selection_with_qwen3_vl_flash(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        SimpleNamespace(
+            qwen_api_key="server-qwen-key",
+            qwen_base_url="https://dashscope.example/v1",
+        ),
+    )
+    payload = ChatRequest(
+        session_id="student-demo",
+        message="分析附件",
+        model_provider="deepseek",
+        model="deepseek-v4-flash",
+        api_key="deepseek-key",
+        base_url="https://deepseek.example/v1",
+    )
+    client, should_close = main_module.select_chat_model_client(payload)
+    assert should_close is True
+    assert client.provider == "qwen"
+    assert client.model == "qwen3-vl-flash"
+    assert client.base_url == "https://dashscope.example/v1"
+    asyncio.run(client.close())
 
 
 def test_custom_provider_requires_key_and_base_url():

@@ -198,6 +198,32 @@ def test_router_uses_model_to_select_learning_plan_intent():
     assert routed["intent"] == "plan"
 
 
+def test_attachment_analysis_uses_qwen3_vl_flash_client():
+    class FakeQwenFlash:
+        model = "qwen3-vl-flash"
+
+        def __init__(self):
+            self.calls = 0
+
+        async def chat(self, messages, **_kwargs):
+            self.calls += 1
+            assert messages[0]["images"] == ["image-base64"]
+            return '{"transcription":"求电流","topology":"串联电路"}'
+
+    client = FakeQwenFlash()
+    engine = object.__new__(CircuitTutorEngine)
+    engine.ollama = object()
+    result = asyncio.run(engine._analyze_attachments({
+        "attachment_text": "[附件：题目.pdf]",
+        "attachment_images": ["image-base64"],
+        "llm": client,
+    }))
+
+    assert client.calls == 1
+    assert result["attachment_blueprint"]["transcription"] == "求电流"
+    assert "附件结构化识别" in result["attachment_context"]
+
+
 def test_quiz_rendering_is_spacious_structured_and_has_no_references():
     engine = object.__new__(CircuitTutorEngine)
     draft = CircuitTutorEngine._fallback_quiz(

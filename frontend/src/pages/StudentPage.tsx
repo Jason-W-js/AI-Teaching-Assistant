@@ -27,7 +27,6 @@ import {
   CircleStop,
   Cloud,
   Clock3,
-  Cpu,
   Database,
   FileText,
   ExternalLink,
@@ -76,7 +75,7 @@ import {
   uploadKnowledgeFile,
   rebuildKnowledgeBase,
 } from '../lib/api'
-import { ChatMode, useChatStore } from '../store/chatStore'
+import { CHAT_MODEL, CHAT_MODEL_PROVIDER, ChatMode, useChatStore } from '../store/chatStore'
 
 const { TextArea } = Input
 type WorkspaceView = 'chat' | 'graph' | 'mistakes'
@@ -89,7 +88,7 @@ const providerLabels: Record<ModelProviderId, string> = {
 }
 
 const fallbackModelCatalog: ModelCatalog = {
-  default: { provider: 'ollama', model: 'qwen3.5:2b' },
+  default: { provider: CHAT_MODEL_PROVIDER, model: CHAT_MODEL },
   providers: [
     {
       id: 'ollama',
@@ -499,7 +498,7 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
         </button>
         <div className="privacy-note">
           <span className={`privacy-dot ${modelProvider === 'ollama' ? '' : 'cloud'}`} />
-          {modelProvider === 'ollama' ? '资料与模型推理均保留在本机' : '提问内容将发送至所选模型 API'}
+          {modelProvider === 'ollama' ? '资料与模型推理均保留在本机' : '提问内容将发送至通义千问 API'}
         </div>
       </div>
     </aside>
@@ -697,8 +696,8 @@ function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent:
             {message.role === 'assistant' && (
               <div className="message-agent">
                 <span>{message.agent || (streaming && index === messages.length - 1 ? stageAgent || '多智能体助教' : '多智能体助教')}</span>
-                <Tag bordered={false} title={`${providerLabels[message.provider || 'ollama']} · ${message.model || ''}`}>
-                  {providerLabels[message.provider || 'ollama']} · {message.model || 'qwen3.5:2b'}
+                <Tag bordered={false} title={`${providerLabels[message.provider || CHAT_MODEL_PROVIDER]} · ${message.model || ''}`}>
+                  {providerLabels[message.provider || CHAT_MODEL_PROVIDER]} · {message.model || CHAT_MODEL}
                 </Tag>
               </div>
             )}
@@ -985,25 +984,14 @@ function ModelSettingsModal({
     if (open) setDraft(active)
   }, [open, active])
 
-  const provider = catalog.providers.find((item) => item.id === draft.provider)
-    || fallbackModelCatalog.providers[0]
-  const selectableModels = provider.model_options || provider.models.map((model) => ({
-    value: model,
-    label: model,
+  const provider = catalog.providers.find((item) => item.id === CHAT_MODEL_PROVIDER)
+    || fallbackModelCatalog.providers.find((item) => item.id === CHAT_MODEL_PROVIDER)!
+  const selectableModels = [{
+    value: CHAT_MODEL,
+    label: CHAT_MODEL,
     disabled: false,
-    description: '',
-  }))
-
-  const chooseProvider = (id: ModelProviderId) => {
-    const next = catalog.providers.find((item) => item.id === id)
-      || fallbackModelCatalog.providers.find((item) => item.id === id)!
-    setDraft({
-      provider: id,
-      model: next.default_model || '',
-      apiKey: '',
-      baseUrl: next.base_url,
-    })
-  }
+    description: '对话答题与图片/文档附件识别',
+  }]
 
   const applyModel = () => {
     if (!draft.model.trim()) {
@@ -1025,7 +1013,7 @@ function ModelSettingsModal({
     }
     setModelConfig({ ...draft, model: draft.model.trim(), baseUrl: draft.baseUrl.trim() })
     onClose()
-    toast.success(`已切换到 ${draft.model.trim()}`)
+    toast.success('qwen3-vl-flash 配置已保存')
   }
 
   const clearSavedApiKey = () => {
@@ -1033,12 +1021,6 @@ function ModelSettingsModal({
     setModelConfig(cleared)
     setDraft((value) => ({ ...value, apiKey: '' }))
     toast.success('已清除当前浏览器保存的 API Key')
-  }
-
-  const providerIcon = (id: ModelProviderId) => {
-    if (id === 'ollama') return <Cpu size={18} />
-    if (id === 'custom') return <ServerCog size={18} />
-    return <Cloud size={18} />
   }
 
   return (
@@ -1053,29 +1035,20 @@ function ModelSettingsModal({
       <div className="modal-heading model-modal-heading">
         <span className="modal-icon"><ServerCog size={22} /></span>
         <div>
-          <h2>选择与配置模型</h2>
-          <p>Ollama 可稍后启动；未连接时仍可配置并使用云端 OpenAI 兼容模型。</p>
+          <h2>配置多模态模型</h2>
+          <p>对话答题、图片和文档附件识别统一使用 qwen3-vl-flash。</p>
         </div>
       </div>
 
-      <div className="provider-grid" role="radiogroup" aria-label="模型提供商">
-        {catalog.providers.map((item) => (
-          <button
-            type="button"
-            role="radio"
-            aria-checked={draft.provider === item.id}
-            key={item.id}
-            className={`provider-card ${draft.provider === item.id ? 'active' : ''}`}
-            onClick={() => chooseProvider(item.id)}
-          >
-            <span className="provider-icon">{providerIcon(item.id)}</span>
-            <span>
-              <strong>{item.label}</strong>
-              <small>{item.description}</small>
-            </span>
-            {draft.provider === item.id && <Check size={15} className="provider-check" />}
-          </button>
-        ))}
+      <div className="provider-grid" aria-label="固定模型提供商">
+        <div className="provider-card active">
+          <span className="provider-icon"><Cloud size={18} /></span>
+          <span>
+            <strong>{provider.label}</strong>
+            <small>统一承载文本答题与多模态附件识别</small>
+          </span>
+          <Check size={15} className="provider-check" />
+        </div>
       </div>
 
       <div className="model-config-panel">
@@ -1089,9 +1062,8 @@ function ModelSettingsModal({
                 label: option.description ? `${option.label} · ${option.description}` : option.label,
                 disabled: option.disabled,
               }))}
-              onChange={(model) => setDraft((value) => ({ ...value, model }))}
               style={{ width: '100%' }}
-              showSearch
+              disabled
               aria-label="选择模型"
             />
           ) : (
@@ -1146,7 +1118,7 @@ function ModelSettingsModal({
 
       <div className="model-modal-actions">
         <Button onClick={onClose}>取消</Button>
-        <Button type="primary" onClick={applyModel}>应用模型</Button>
+        <Button type="primary" onClick={applyModel}>保存配置</Button>
       </div>
     </Modal>
   )
@@ -1496,7 +1468,7 @@ function StudentPageContent() {
               type="button"
               className="model-badge model-picker-button"
               onClick={() => setModelModalOpen(true)}
-              aria-label="选择和配置模型"
+              aria-label="配置 qwen3-vl-flash"
             >
               <span className={`online-dot ${modelConfig.provider === 'ollama' ? '' : 'cloud'}`} />
               <span>{modelConfig.model}</span>
@@ -1664,7 +1636,7 @@ function StudentPageContent() {
           onClick={() => void rebuildCurrentKnowledgeBase()}
           disabled={currentKbStatus?.state === 'building' || currentKbStatus?.state === 'cancelling'}
         >
-          使用当前模型重新构建已有资料
+          使用 qwen3-vl-flash 重新构建已有资料
         </Button>
         <div className="modal-note">
           <Check size={15} /> 新知识库构建期间可继续使用其他已就绪知识库

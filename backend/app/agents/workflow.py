@@ -520,9 +520,15 @@ class CircuitTutorEngine:
             text_parts.append(state["attachment_text"])
         images = state.get("attachment_images", [])
         if images:
-            await _emit(state, "vision", "正在识别题目图片中的电路、参数与问题", "视觉理解 Agent")
+            await _emit(
+                state,
+                "vision",
+                "qwen3-vl-flash 正在识别图片或文档中的电路、公式与题目",
+                "视觉理解 Agent",
+            )
             prompt = (
-                "你是电路题结构识别助手。准确读取题干和电路图，不要解题。只输出合法 JSON，字段为："
+                "你是电路题结构识别助手。输入可能是题目图片或文档页面。准确读取题干、公式和电路图，"
+                "不要解题。只输出合法 JSON，字段为："
                 "transcription（题干转写）、topology（必须明确串并联与每个支路元件）、"
                 "knowns（已知量数组）、unknowns（待求量数组）、knowledge_points（知识点数组）、"
                 "constraints（特殊条件数组，如总功率因数为1）、question_type。"
@@ -539,13 +545,15 @@ class CircuitTutorEngine:
                 blueprint = _json_object(vision_text)
                 if blueprint:
                     text_parts.append(
-                        "[题目图片结构化识别]\n"
+                        "[附件结构化识别]\n"
                         + json.dumps(blueprint, ensure_ascii=False, indent=2)
                     )
                 elif vision_text.strip():
-                    text_parts.append("[题目图片识别结果]\n" + vision_text.strip())
+                    text_parts.append("[附件识别结果]\n" + vision_text.strip())
             except Exception as exc:
-                text_parts.append(f"[题目图片已附加；预识别失败：{exc}。请在最终回答中直接读取图片。]")
+                text_parts.append(
+                    f"[图片或文档页面已附加；预识别失败：{exc}。请在最终回答中直接读取附件。]"
+                )
         return {
             "attachment_context": "\n\n".join(text_parts)[:32000],
             "attachment_blueprint": blueprint,

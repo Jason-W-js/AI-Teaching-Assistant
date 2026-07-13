@@ -31,12 +31,15 @@ const sessionKey = 'circuitmind-session-id'
 const studentKey = 'circuitmind-student-id'
 const modelConfigKey = 'circuitmind-model-config'
 const defaultKnowledgeBaseKey = 'circuitmind-default-knowledge-base'
+export const CHAT_MODEL_PROVIDER: ModelProviderId = 'qwen'
+export const CHAT_MODEL = 'qwen3-vl-flash'
+export const QWEN_CHAT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
 const defaultModelConfig: ModelConfig = {
-  provider: 'ollama',
-  model: 'qwen3.5:2b',
+  provider: CHAT_MODEL_PROVIDER,
+  model: CHAT_MODEL,
   apiKey: '',
-  baseUrl: 'http://127.0.0.1:11434',
+  baseUrl: QWEN_CHAT_BASE_URL,
 }
 
 function getSessionId() {
@@ -48,14 +51,17 @@ function getSessionId() {
   return value
 }
 
-function canonicalModel(provider: ModelProviderId, model: string) {
-  const normalized = model.trim()
-  if (provider !== 'qwen') return normalized
-  const canonical = normalized.toLowerCase()
-  if (canonical === 'qwen3-vl-embedding' || canonical === 'qwen3-vl-8b-instruct') {
-    return 'qwen3-vl-flash'
+function fixedChatModelConfig(value: Partial<ModelConfig>): ModelConfig {
+  const qwenConfig = value.provider === CHAT_MODEL_PROVIDER
+  return {
+    provider: CHAT_MODEL_PROVIDER,
+    model: CHAT_MODEL,
+    apiKey: qwenConfig && typeof value.apiKey === 'string' ? value.apiKey : '',
+    baseUrl:
+      qwenConfig && typeof value.baseUrl === 'string' && value.baseUrl.trim()
+        ? value.baseUrl.trim()
+        : QWEN_CHAT_BASE_URL,
   }
-  return canonical
 }
 
 function getStudentId() {
@@ -70,16 +76,7 @@ function getStudentId() {
 function getModelConfig(): ModelConfig {
   try {
     const stored = JSON.parse(localStorage.getItem(modelConfigKey) || '{}')
-    const providers: ModelProviderId[] = ['ollama', 'deepseek', 'qwen', 'custom']
-    if (!providers.includes(stored.provider) || typeof stored.model !== 'string') {
-      return defaultModelConfig
-    }
-    const config = {
-      provider: stored.provider,
-      model: canonicalModel(stored.provider, stored.model || defaultModelConfig.model),
-      apiKey: typeof stored.apiKey === 'string' ? stored.apiKey : '',
-      baseUrl: typeof stored.baseUrl === 'string' ? stored.baseUrl : '',
-    }
+    const config = fixedChatModelConfig(stored)
     localStorage.setItem(modelConfigKey, JSON.stringify(config))
     return config
   } catch {
@@ -190,7 +187,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
   },
   setModelConfig: (modelConfig) => {
-    const normalized = { ...modelConfig, model: canonicalModel(modelConfig.provider, modelConfig.model) }
+    const normalized = fixedChatModelConfig(modelConfig)
     localStorage.setItem(modelConfigKey, JSON.stringify(normalized))
     set({ modelConfig: normalized })
   },

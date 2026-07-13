@@ -70,6 +70,7 @@ class Settings:
     max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "80"))
     max_attachment_mb: int = int(os.getenv("MAX_ATTACHMENT_MB", "20"))
     max_chat_attachments: int = int(os.getenv("MAX_CHAT_ATTACHMENTS", "5"))
+    max_chat_document_images: int = int(os.getenv("MAX_CHAT_DOCUMENT_IMAGES", "6"))
     qdrant_url: str = os.getenv("QDRANT_URL", "")
     qdrant_api_key: str = os.getenv("QDRANT_API_KEY", "")
     neo4j_uri: str = os.getenv("NEO4J_URI", "")

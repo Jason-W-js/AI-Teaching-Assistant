@@ -4,16 +4,16 @@
 
 已跑通的链路：
 
-- Ollama 是可选服务：可切换已安装的本地模型，或接入 DeepSeek、通义千问和自定义 OpenAI 兼容 API；Ollama 未启动时后端和学生端仍可运行，并优先使用已配置的云模型。私有思考字段不会返回前端。
+- 学生端对话答题及图片/文档附件识别固定使用 `qwen3-vl-flash`；私有思考字段不会返回前端。
 - LangGraph 编排的大模型路由 Agent、答疑 Agent、检索 Agent、出题 Agent、学习规划 Agent 和 SymPy 验算 Agent；学习规划会结合知识库资料生成可执行路线。
 - 图片出题先提取“电路拓扑、已知量、特殊条件、待求量”蓝图；连续“再出一道”会沿用最近生成题，同类题不调用知识库检索并必须通过同构校验。
 - 教材清洗、章节/段落语义切分、章/节/原始页码元数据、384 维向量化和 populated FAISS/Qdrant 索引；Excel/JSON 题库与课程知识库严格隔离。
 - 向量语义检索 + BM25 关键词检索 + 规则重排。
 - FastAPI、CORS、统一异常处理、日志、POST SSE 真正 token 流式输出、上传与后台重建知识库。
 - Redis 最近 N 轮会话记忆；Redis 不可用时自动切换本地持久化记忆，服务重启后仍可执行出题去重。
-- 学生交互栏支持题目图片和 PDF/Word/Excel/Markdown 等附件；`qwen3.5:2b` 直接完成图片题干识别。
+- 学生交互栏支持题目图片和 PDF/Word/Excel/Markdown 等附件；PDF 页面和 Office 内嵌图片会交给 `qwen3-vl-flash` 识别公式、电路图与题干。
 - React + TypeScript + Ant Design + Zustand + KaTeX 学生端，含 LaTeX 定界符容错预处理。
-- 右上角模型选择器动态读取本机 Ollama 模型；所选模型与云端 API 配置会保存在当前浏览器，也可通过后端环境变量配置。
+- 右上角可配置通义千问 API Key 与 Base URL；配置会保存在当前浏览器，也可通过后端环境变量提供。
 - 左侧“最近学习”读取持久化会话列表，支持点击恢复历史对话；刷新页面后会自动恢复当前会话。
 - 学生端知识图谱默认展示聚合后的“教材—页面—知识点—电路图—去重元件”语义关系；公式、文本片段和网络节点保留在底层图中作为检索证据，不直接铺到画布上。
 - 答疑和出题内容均可加入持久化错题本；归档前自动提取知识点，错题页可按薄弱点发起知识补全与巩固规划。
@@ -56,7 +56,7 @@ flowchart LR
   W --> H[向量 + BM25 + Rerank]
   H --> V[(FAISS + Chunk 元数据)]
   LP --> H
-  A --> L[Ollama qwen3.5:2b]
+  A --> L[qwen3-vl-flash]
   K --> L
   Q --> P[知识点校验 + 会话去重 + SymPy 验算]
   API --> U[上传与后台知识库重建]
@@ -97,16 +97,16 @@ powershell -ExecutionPolicy Bypass -File scripts/start.ps1
 
 打开 `http://127.0.0.1:8000/student`。生产构建由 FastAPI 直接提供；开发前端可在 `frontend` 中运行 `npm run dev`，Vite 会代理 `/api` 到 8000 端口。
 
-## 模型切换与 API 配置
+## 模型与 API 配置
 
-点击学生端右上角的模型名称即可选择：
+学生端统一使用 `qwen3-vl-flash` 完成：
 
-- 本地 Ollama：自动显示 `ollama list` 中已经安装的模型。
-- DeepSeek API：默认提供 `deepseek-v4-flash` 和 `deepseek-v4-pro`。
-- 通义千问 API：界面显示 `Qwen3.7-Plus`、`Qwen3.7-Max` 等易读名称，请求时使用百炼要求的精确小写 ID（如 `qwen3.7-plus`、`qwen3.7-max`）。`qwen3-vl-8b-instruct` 在当前账号未开放，`qwen3-vl-embedding` 仅用于知识库向量化，因此会在聊天模型下拉表中禁用；旧配置若传入这两个模型，会自动回退到 `qwen3-vl-flash`。Base URL 可按百炼工作空间修改。
-- 自定义 API：填写任意兼容 OpenAI Chat Completions 的模型名称、API Key 和 Base URL。
+- 普通文本问答、分步解题和学习规划。
+- PNG/JPEG/WebP/BMP 图片附件识别。
+- PDF 页面视觉识别，以及 DOCX/XLSX 中内嵌图片的识别；文档提取出的正文也会一并进入回答上下文。
+- 知识库上传或重建时的多模态分析。
 
-页面输入的模型配置和 API Key 会写入当前浏览器的 `localStorage`，不会写入项目文件；配置弹窗提供清除已保存密钥的入口。公用电脑不建议保存云端密钥。也可以在 `.env` 配置 `DEEPSEEK_API_KEY`、`QWEN_API_KEY` 及对应 Base URL。使用云端多模态模型时，题目、最近对话、检索上下文和必要的电路图会发送到所选服务。
+页面输入的 API Key 会写入当前浏览器的 `localStorage`，不会写入项目文件；配置弹窗提供清除入口。公用电脑不建议保存云端密钥。也可以在 `.env` 配置 `QWEN_API_KEY` 和 `QWEN_BASE_URL`。题目、最近对话、检索上下文及附件视觉内容会发送到通义千问 API。
 
 ## 环境重建
 
@@ -145,20 +145,20 @@ docker compose up -d redis
 
 1. 选择默认知识库，或输入英文标识创建独立知识库。
 2. 上传 PDF、Word、Markdown 或文本；Excel/JSON 题库只保存，不触发知识库构建。
-3. 后端把当前选中的模型配置仅传给本次后台任务，执行语义清洗、版面解析、电路图理解、Chunking、Embedding 和索引重载；API Key 不写入知识库产物。
+3. 后端使用 `qwen3-vl-flash` 执行语义清洗、版面解析、电路图理解、Chunking、Embedding 和索引重载；API Key 不写入知识库产物。
 4. `/api/kb/status` 返回 `building`、`ready` 或 `error`。
 
-已有资料无需重新上传：在同一弹窗点击“使用当前模型重新构建已有资料”即可启动 v2 多模态重建。
+已有资料无需重新上传：在同一弹窗点击“使用 qwen3-vl-flash 重新构建已有资料”即可启动 v2 多模态重建。
 
 Excel/JSON 题库不会进入 RAG 知识库，也不会参与检索或图谱构建。出题 Agent 只依据学生原题和会话历史生成同构变式。
 
-学生交互栏的回形针按钮可上传题目图片或文档附件。图片会由当前选择且支持视觉输入的模型识别题干、参数、连接关系和知识点，再进入答疑或同类出题工作流；选择远程模型时图片会发送到对应 API。
+学生交互栏的回形针按钮可上传题目图片或文档附件。图片、PDF 页面及 Office 内嵌图片会由 `qwen3-vl-flash` 识别题干、公式、参数、连接关系和知识点，再进入答疑或同类出题工作流。每轮最多发送 `MAX_CHAT_DOCUMENT_IMAGES`（默认 6）张由文档产生的视觉页面或内嵌图片。
 
 ## 分层多模态图文知识库（v2.1）
 
 新版建库同时产出以下可审计数据：
 
-- `cleaning_audit.json`：DeepSeek/规则对每页的保留或丢弃决定及原因，原 PDF 永不物理修改。
+- `cleaning_audit.json`：`qwen3-vl-flash`/规则对每页的保留或丢弃决定及原因，原 PDF 永不物理修改。
 - `multimodal_elements.jsonl`：文本、公式、表格、图片、电路图的页码、bbox、阅读顺序、原图路径和内容哈希。
 - `artifacts/`：从 PDF 提取的原始图片。
 - `knowledge_graph.json`：教材—原始页码—Chunk—课程概念—电路元件—网络关系；配置 Neo4j 后会同步到图数据库。
@@ -192,14 +192,14 @@ docker compose up -d qdrant redis
   "mode": "auto",
   "knowledge_base": "default",
   "attachment_ids": [],
-  "model_provider": "ollama",
-  "model": "qwen3.5:2b",
+  "model_provider": "qwen",
+  "model": "qwen3-vl-flash",
   "api_key": "",
-  "base_url": "http://127.0.0.1:11434"
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
 }
 ```
 
-返回 SSE 事件：`connected`、`status`、`delta`、`meta`、`done`；错误为 `error`。答疑 Agent 的 `delta` 是 Ollama 实时 token，模型思维链不会传输。
+返回 SSE 事件：`connected`、`status`、`delta`、`meta`、`done`；错误为 `error`。答疑 Agent 通过 `qwen3-vl-flash` 实时返回 token，模型思维链不会传输。为兼容旧客户端，请求仍接受模型字段，但学生对话会固定路由到 `qwen3-vl-flash`。
 
 ### `POST /api/attachments`
 
@@ -223,7 +223,7 @@ docker compose up -d qdrant redis
 - `DELETE /api/sessions/{session_id}`（同时删除该会话的附件）
 - `GET /api/kb/status`
 - `GET /api/kb/{knowledge_base}/graph`
-- `POST /api/kb/rebuild`（使用当前模型配置重建已有资料）
+- `POST /api/kb/rebuild`（使用 `qwen3-vl-flash` 重建已有资料）
 - `GET /api/mistakes?student_id=...`
 - `POST /api/mistakes`（调用当前模型提取知识点后归档）
 - `DELETE /api/mistakes/{mistake_id}?student_id=...`

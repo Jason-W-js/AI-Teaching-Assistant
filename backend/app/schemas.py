@@ -13,8 +13,8 @@ class ChatRequest(BaseModel):
     mode: Literal["auto", "answer", "quiz", "plan"] = "auto"
     knowledge_base: str = Field(default="default", min_length=1, max_length=48)
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
-    model_provider: Literal["ollama", "deepseek", "qwen", "custom"] = "ollama"
-    model: str = Field(default="qwen3.5:2b", min_length=1, max_length=128)
+    model_provider: Literal["ollama", "deepseek", "qwen", "custom"] = "qwen"
+    model: str = Field(default="qwen3-vl-flash", min_length=1, max_length=128)
     api_key: str = Field(default="", max_length=512)
     base_url: str = Field(default="", max_length=512)
 

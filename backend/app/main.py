@@ -28,11 +28,11 @@ from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
 from backend.app.services.mistake_book import MistakeBook
 from backend.app.services.model_catalog import (
+    QWEN_CHAT_MODEL,
     QWEN_MODELS,
     QWEN_MODEL_OPTIONS,
     canonical_model_id,
     chat_model_unavailable_reason,
-    choose_default_model,
 )
 
 
@@ -281,16 +281,8 @@ async def available_models() -> dict[str, Any]:
     local_models = model_health.get("models", [])
     if settings.ollama_model not in local_models:
         local_models = [settings.ollama_model, *local_models]
-    default_provider, default_model = choose_default_model(
-        model_health,
-        ollama_model=settings.ollama_model,
-        qwen_model=settings.qwen_vision_model,
-        deepseek_model=settings.deepseek_model,
-        qwen_configured=bool(settings.qwen_api_key),
-        deepseek_configured=bool(settings.deepseek_api_key),
-    )
     return {
-        "default": {"provider": default_provider, "model": default_model},
+        "default": {"provider": "qwen", "model": QWEN_CHAT_MODEL},
         "ollama_available": bool(model_health.get("ok")),
         "providers": [
             {
@@ -320,7 +312,7 @@ async def available_models() -> dict[str, Any]:
                 "description": "阿里云百炼文本与多模态 OpenAI 兼容接口",
                 "models": list(dict.fromkeys([*QWEN_MODELS, settings.qwen_vision_model])),
                 "model_options": QWEN_MODEL_OPTIONS,
-                "default_model": settings.qwen_vision_model,
+                "default_model": QWEN_CHAT_MODEL,
                 "base_url": settings.qwen_base_url,
                 "requires_api_key": True,
                 "configured": bool(settings.qwen_api_key),
@@ -446,19 +438,33 @@ def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
     )
 
 
+def select_chat_model_client(payload: ChatRequest) -> tuple[Any, bool]:
+    """Use Qwen3-VL-Flash for student answers and attachment understanding."""
+
+    qwen_payload = payload.model_copy(
+        update={
+            "model_provider": "qwen",
+            "model": QWEN_CHAT_MODEL,
+            "api_key": payload.api_key if payload.model_provider == "qwen" else "",
+            "base_url": payload.base_url if payload.model_provider == "qwen" else "",
+        }
+    )
+    return select_model_client(qwen_payload)
+
+
 @app.post("/api/chat")
 async def chat(payload: ChatRequest) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         selected_client: Any | None = None
         close_selected_client = False
         try:
-            selected_client, close_selected_client = select_model_client(payload)
+            selected_client, close_selected_client = select_chat_model_client(payload)
             yield sse(
                 "connected",
                 {
                     "session_id": payload.session_id,
-                    "provider": payload.model_provider,
-                    "model": payload.model,
+                    "provider": "qwen",
+                    "model": QWEN_CHAT_MODEL,
                     "knowledge_base": payload.knowledge_base,
                 },
             )
@@ -520,8 +526,8 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 {
                     "intent": result.intent,
                     "agent": result.agent,
-                    "provider": payload.model_provider,
-                    "model": payload.model,
+                    "provider": "qwen",
+                    "model": QWEN_CHAT_MODEL,
                     "sources": persisted_sources,
                     "verification": result.verification,
                 },
@@ -536,8 +542,8 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 result.content,
                 {
                     "agent": result.agent,
-                    "provider": payload.model_provider,
-                    "model": payload.model,
+                    "provider": "qwen",
+                    "model": QWEN_CHAT_MODEL,
                     "knowledge_base": payload.knowledge_base,
                     "sources": persisted_sources,
                 },
