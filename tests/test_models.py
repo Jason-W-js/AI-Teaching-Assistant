@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 
 import httpx
@@ -9,12 +10,55 @@ from backend.app.agents.workflow import CircuitTutorEngine
 from backend.app.schemas import ChatRequest
 from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
+from backend.app.config import settings
 
 
 def test_chat_request_defaults_to_required_local_qwen():
     request = ChatRequest(session_id="student-demo", message="测试")
-    assert request.model_provider == "ollama"
-    assert request.model == "qwen3.5:2b"
+    assert request.model_provider == "lmstudio"
+    assert request.model == "qwen/qwen3.5-9b"
+
+
+def test_lmstudio_provider_does_not_require_api_key():
+    request = ChatRequest(
+        session_id="student-demo",
+        message="测试",
+        model_provider="lmstudio",
+        model="qwen/qwen3.5-9b",
+        base_url="http://127.0.0.1:1234/v1",
+    )
+    assert request.api_key == ""
+
+
+def test_lmstudio_client_keeps_local_multimodal_images():
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\nsmall-test-image").decode("ascii")
+    client = OpenAICompatibleClient(
+        provider="lmstudio",
+        model="qwen/qwen3.5-9b",
+        base_url="http://127.0.0.1:1234/v1",
+        allow_images=True,
+        trust_env=False,
+    )
+    messages = client._messages([{"role": "user", "content": "识别", "images": [encoded]}])
+    assert messages[0]["content"][0] == {"type": "text", "text": "识别"}
+    assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+    asyncio.run(client.close())
+
+
+def test_generation_timeout_only_guards_first_token():
+    assert settings.chat_first_token_timeout_seconds == 600
+
+    lmstudio = OpenAICompatibleClient(
+        provider="lmstudio",
+        model="qwen/qwen3.5-9b",
+        base_url="http://127.0.0.1:1234/v1",
+        trust_env=False,
+    )
+    ollama = OllamaClient(model="qwen3.5:4b")
+    assert lmstudio._client.timeout.read is None
+    assert ollama._client.timeout.read is None
+    asyncio.run(lmstudio.close())
+    asyncio.run(ollama.close())
 
 
 def test_custom_provider_requires_key_and_base_url():

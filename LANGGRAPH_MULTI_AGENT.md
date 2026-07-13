@@ -1,6 +1,6 @@
 # CircuitMind LangGraph 多智能体工作流
 
-本文档对应当前学生端的实际 LangGraph 编排。总图先完成附件理解和意图路由，再进入答疑子图或同类出题子图。
+本文档对应当前学生端的实际 LangGraph 编排。总图先结合最近对话与附件完成意图路由：概念答疑和上下文追问走轻量直答链路，明确的求解或步骤诊断才进入四智能体子图，同类出题进入独立出题子图；寒暄、离题内容、噪声及不完整指令由会话引导链处理，不触发检索和解题。
 
 ```mermaid
 flowchart TB
@@ -11,36 +11,43 @@ flowchart TB
 
     subgraph Orchestrator["LangGraph 总编排图"]
         direction TB
-        AttachmentReader["附件理解 Agent<br/>题干、拓扑、已知量、待求量"]
+        AttachmentReader["附件理解 Agent<br/>题干、节点—支路拓扑、已知量、待求量"]
         IntentRouter{"意图路由 Agent"}
-        AnswerEntry["答疑 Agent 子图"]
+        DirectQA["上下文答疑 Agent<br/>概念解释 / 结果追问"]
+        AnswerEntry["过程解题 Agent 子图"]
         QuizEntry["出题 Agent 子图"]
+        Conversation["会话引导 Agent<br/>寒暄 / 离题 / 噪声 / 补问"]
 
         AttachmentReader --> IntentRouter
-        IntentRouter -->|"答疑"| AnswerEntry
+        IntentRouter -->|"概念答疑 / 上下文追问"| DirectQA
+        IntentRouter -->|"求解 / 步骤诊断"| AnswerEntry
         IntentRouter -->|"同类出题"| QuizEntry
+        IntentRouter -->|"非任务 / 信息不足"| Conversation
     end
 
     AttachmentStore --> AttachmentReader
     Memory --> AttachmentReader
-    VisionModel["Ollama qwen3.5:2b<br/>视觉理解 + 思考模式"] --> AttachmentReader
+    VisionModel["LM Studio Qwen3.5<br/>本地视觉理解"] --> AttachmentReader
 
-    subgraph AnswerGraph["答疑 Agent 工作流"]
+    subgraph AnswerGraph["过程型解题辅导工作流"]
         direction LR
-        Rewrite["Query 改写 Agent<br/>口语问题专业化"]
-        AnswerRetrieve["混合检索 Agent<br/>向量 + BM25 + Rerank"]
-        Compose["Prompt 组装 Agent<br/>资料、历史、LaTeX 约束"]
-        AnswerLLM["答疑生成 Agent<br/>分步解答 + SSE"]
+        Understand["题目理解智能体<br/>多模态结构化"]
+        AnswerRetrieve["有依据的知识关联<br/>向量 + BM25 + Rerank + 质量门控"]
+        Solve["领域求解智能体<br/>内部参考解"]
+        Diagnose["验证与错因诊断智能体<br/>参考解 + SymPy + 学生步骤"]
+        Tutor["教学辅导智能体<br/>L1-L5 答案释放策略"]
 
-        Rewrite --> AnswerRetrieve --> Compose --> AnswerLLM
+        Understand --> AnswerRetrieve --> Solve --> Diagnose --> Tutor
     end
 
-    AnswerEntry --> Rewrite
+    AnswerEntry --> Understand
+    DirectQA --> Stream
+    Conversation --> Stream
 
     subgraph QuizGraph["同类出题 Agent 工作流"]
         direction TB
         Extract["原题分析 Agent<br/>知识点 + 题型 + 结构蓝图"]
-        QuizRetrieve["同类题检索 Agent<br/>过滤无关资料"]
+        QuizRetrieve["命题检索器<br/>教材定义 + 相似例题"]
         Generate["出题 Agent<br/>保持拓扑与设问同构"]
         Verify{"验算与校验 Agent<br/>结构 / 去重 / SymPy"}
         Repair["修正 Agent<br/>生成同构可验证变式"]
@@ -71,12 +78,17 @@ flowchart TB
     VectorDB --> QuizRetrieve
     BM25 --> QuizRetrieve
 
-    ModelGateway["模型网关<br/>Ollama / DeepSeek / 通义千问 / 自定义 API"] --> AnswerLLM
+    ModelGateway["模型网关<br/>默认 Qwen3.5-9B / 可按智能体异构"] --> Understand
+    ModelGateway --> DirectQA
+    ModelGateway --> Conversation
+    ModelGateway --> Solve
+    ModelGateway --> Diagnose
+    ModelGateway --> Tutor
     ModelGateway --> Generate
     SymPy["Python / SymPy<br/>数值合理性验算"] --> Verify
     SymPy --> VerifyRepair
 
-    AnswerLLM --> Stream["SSE: status / delta / meta / done"]
+    Tutor --> Stream["SSE: status / delta / meta / done"]
     Render --> Stream
     Stream --> Student
 
@@ -85,7 +97,7 @@ flowchart TB
     classDef storage fill:#edf2ff,stroke:#526fa8,color:#273d68,stroke-width:1.2px;
     classDef model fill:#f5ecff,stroke:#8057a6,color:#4b2c68,stroke-width:1.2px;
 
-    class AttachmentReader,AnswerEntry,QuizEntry,Rewrite,AnswerRetrieve,Compose,AnswerLLM,Extract,QuizRetrieve,Generate,Repair,Render agent;
+    class AttachmentReader,DirectQA,AnswerEntry,QuizEntry,Conversation,Understand,AnswerRetrieve,Solve,Diagnose,Tutor,Extract,QuizRetrieve,Generate,Repair,Render agent;
     class IntentRouter,Verify,VerifyRepair decision;
     class Memory,AttachmentStore,CleanDocs,Chunks,VectorDB,BM25 storage;
     class VisionModel,ModelGateway,SymPy model;
@@ -97,8 +109,11 @@ LangGraph 状态中主要保存以下信息：
 
 - `message`、`history`、`knowledge_base`：学生输入、最近对话和当前知识库。
 - `attachment_context`、`attachment_blueprint`：附件识别文本以及电路拓扑、已知量、待求量蓝图。
-- `intent`：路由结果，取值为 `answer` 或 `quiz`。
-- `rewritten_query`、`hits`：专业化检索问题和混合检索结果。
+- `intent`：路由结果，取值为 `qa`、`answer`、`quiz` 或 `chat`；只有 `answer` 执行完整解题链，`chat` 不检索课程资料也不改写题目状态。
+- `problem_analysis`：题型、知识点、已知量、待求量、拓扑和信息完整性。
+- `reference_solution`：仅在后端保存的内部方法、计划、检查点、推导和最终答案。
+- `diagnosis`、`verification`：学生步骤的结构化错因与 SymPy 数值链校验。
+- `tutor_action`、`hint_level`：当前教学动作以及 L1–L5 答案释放级别。
 - `knowledge_point`、`quiz_type`、`quiz_family`：出题知识点、数值/概念题型和同构题家族。
 - `draft`、`verification`：生成题草稿以及结构、去重和 SymPy 校验结果。
 - `response`、`sources`：最终回复和可追溯资料来源。

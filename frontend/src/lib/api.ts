@@ -13,9 +13,17 @@ export type KBStatus = {
   id: string
   state: 'ready' | 'building' | 'error' | 'missing'
   documents: number
+  indexed_documents?: number
+  failed_documents?: number
   chunks: number
+  questions: number
+  relations: number
   message: string
+  source_warnings?: Array<{ source: string; warnings: string[] }>
 }
+
+export type TutorAction = 'auto' | 'understand' | 'method' | 'hint' | 'check_step' | 'explain_error' | 'full_solution'
+export type TutoringMode = 'guided' | 'full'
 
 export type AttachmentInfo = {
   id: string
@@ -26,7 +34,7 @@ export type AttachmentInfo = {
   url: string
 }
 
-export type ModelProviderId = 'ollama' | 'deepseek' | 'qwen' | 'custom'
+export type ModelProviderId = 'ollama' | 'lmstudio' | 'deepseek' | 'qwen' | 'custom'
 
 export type ModelConfig = {
   provider: ModelProviderId
@@ -66,11 +74,74 @@ export type StoredMessage = {
   agent?: string
   provider?: ModelProviderId
   model?: string
+  failed?: boolean
+  retry_message?: string
+  attachment_ids?: string[]
+  retry_attachment_ids?: string[]
+}
+
+export type WrongQuestionMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  agent?: string
+  model?: string
+  created_at?: string
+}
+
+export type WrongQuestion = {
+  id: string
+  title: string
+  category_id: string
+  session_id: string
+  knowledge_base: string
+  knowledge_points: string[]
+  messages: WrongQuestionMessage[]
+  created_at: string
+  updated_at: string
+}
+
+export type WrongQuestionCategory = {
+  id: string
+  name: string
+  created_at: string
+  updated_at: string
+}
+
+export type WrongNotebook = {
+  categories: WrongQuestionCategory[]
+  items: WrongQuestion[]
+}
+
+export type KnowledgeGraphQuestion = { id: string; title: string; difficulty?: string; updated_at?: string }
+
+export type KnowledgeGraphNode = {
+  id: string
+  type: 'knowledge_point'
+  label: string
+  category_id: string
+  category_label: string
+  summary: string
+  definition: string
+  key_points: string[]
+  sources: { name: string; chunks: number }[]
+  sections: string[]
+  questions: KnowledgeGraphQuestion[]
+  wrong_questions: KnowledgeGraphQuestion[]
+  chunk_count: number
+}
+
+export type KnowledgeGraph = {
+  knowledge_base: string
+  root: { id: string; label: string }
+  categories: { id: string; label: string; count: number }[]
+  nodes: KnowledgeGraphNode[]
+  edges: { source: string; target: string; type: string }[]
+  stats: { sources: number; knowledge_points: number; questions: number; wrong_questions: number }
 }
 
 type SSECallbacks = {
   onStatus: (data: { stage: string; message: string; agent: string }) => void
-  onMeta: (data: { intent: string; agent: string; provider: ModelProviderId; model: string; sources: SourceInfo[]; verification?: Record<string, unknown> }) => void
+  onMeta: (data: { intent: string; agent: string; provider: ModelProviderId; model: string; sources: SourceInfo[]; verification?: Record<string, unknown>; tutor_action?: TutorAction; hint_level?: number; problem?: Record<string, unknown>; diagnosis?: Record<string, unknown> }) => void
   onDelta: (content: string) => void
   onDone: () => void
   onError: (message: string) => void
@@ -92,6 +163,9 @@ export async function streamChat(
     session_id: string
     message: string
     mode: string
+    tutor_action: TutorAction
+    hint_level: number
+    tutoring_mode: TutoringMode
     knowledge_base: string
     attachment_ids: string[]
     model_provider: ModelProviderId
@@ -114,6 +188,25 @@ export async function streamChat(
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
+  const readWithIdleTimeout = async () => {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    try {
+      return await Promise.race([
+        reader.read(),
+        new Promise<never>((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error('模型连接长时间没有任何进度，请重新生成')),
+            75_000,
+          )
+        }),
+      ])
+    } catch (error) {
+      await reader.cancel().catch(() => undefined)
+      throw error
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }
   let buffer = ''
   let receivedTerminalEvent = false
   const dispatchBlock = (block: string) => {
@@ -132,7 +225,7 @@ export async function streamChat(
     }
   }
   while (true) {
-    const { done, value } = await reader.read()
+    const { done, value } = await readWithIdleTimeout()
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
     const blocks = buffer.split(/\r?\n\r?\n/)
     buffer = blocks.pop() || ''
@@ -200,4 +293,74 @@ export async function uploadKnowledgeFile(file: File, knowledgeBase: string) {
   const result = await response.json()
   if (!response.ok) throw new Error(result.detail || result.error || '上传失败')
   return result
+}
+
+export async function uploadKnowledgeFiles(
+  files: File[],
+  knowledgeBase: string,
+  documentType: 'auto' | 'textbook' | 'exam' | 'question_bank' | 'notes' = 'auto',
+) {
+  const data = new FormData()
+  files.forEach((file) => data.append('files', file))
+  data.append('knowledge_base', knowledgeBase)
+  data.append('document_type', documentType)
+  const response = await fetch('/api/kb/ingest', { method: 'POST', body: data })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.detail || result.error || '批量导入失败')
+  return result
+}
+
+async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(url, init)
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) throw new Error(result.detail || result.error || `请求失败 (${response.status})`)
+  return result as T
+}
+
+export async function fetchWrongNotebook(): Promise<WrongNotebook> {
+  return jsonRequest<WrongNotebook>('/api/wrong-questions')
+}
+
+export async function createWrongQuestion(payload: {
+  session_id: string
+  title?: string
+  category_id?: string
+  knowledge_base: string
+  messages: WrongQuestionMessage[]
+}): Promise<WrongQuestion> {
+  const result = await jsonRequest<{ item: WrongQuestion }>('/api/wrong-questions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  return result.item
+}
+
+export async function updateWrongQuestion(
+  id: string,
+  changes: { title?: string; category_id?: string },
+): Promise<WrongQuestion> {
+  const result = await jsonRequest<{ item: WrongQuestion }>(`/api/wrong-questions/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(changes),
+  })
+  return result.item
+}
+
+export async function deleteWrongQuestion(id: string): Promise<void> {
+  await jsonRequest(`/api/wrong-questions/${encodeURIComponent(id)}`, { method: 'DELETE' })
+}
+
+export async function createWrongQuestionCategory(name: string): Promise<WrongQuestionCategory> {
+  const result = await jsonRequest<{ category: WrongQuestionCategory }>('/api/wrong-questions/categories', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name }),
+  })
+  return result.category
+}
+
+export async function fetchKnowledgeGraph(knowledgeBase: string): Promise<KnowledgeGraph> {
+  return jsonRequest<KnowledgeGraph>(`/api/knowledge-graph?knowledge_base=${encodeURIComponent(knowledgeBase)}`)
 }

@@ -34,7 +34,7 @@ class OllamaClient:
         # Local Ollama must bypass corporate/system HTTP proxies; otherwise POST
         # requests to 127.0.0.1 can silently hang while lightweight GETs appear fine.
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(240.0, connect=10.0), trust_env=False
+            timeout=httpx.Timeout(None, connect=10.0), trust_env=False
         )
 
     async def close(self) -> None:

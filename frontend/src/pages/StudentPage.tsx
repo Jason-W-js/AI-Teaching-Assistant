@@ -11,10 +11,11 @@ import {
   Tag,
   Tooltip,
   Upload,
-  type UploadProps,
+  type UploadFile,
 } from 'antd'
 import {
   ArrowUp,
+  BookmarkPlus,
   BookOpen,
   Bot,
   BrainCircuit,
@@ -36,6 +37,7 @@ import {
   Plus,
   Paperclip,
   Search,
+  RefreshCcw,
   KeyRound,
   ServerCog,
   ShieldCheck,
@@ -48,6 +50,7 @@ import {
 } from 'lucide-react'
 import MathMarkdown from '../components/MathMarkdown'
 import {
+  createWrongQuestion,
   deleteSession,
   fetchKnowledgeBases,
   fetchModels,
@@ -59,22 +62,36 @@ import {
   ModelProviderId,
   SessionSummary,
   SourceInfo,
-  uploadKnowledgeFile,
+  TutoringMode,
+  uploadKnowledgeFiles,
 } from '../lib/api'
-import { ChatMode, useChatStore } from '../store/chatStore'
+import { useChatStore } from '../store/chatStore'
+import { KnowledgeGraphView, WrongNotebookView } from './LearningViews'
 
 const { TextArea } = Input
+type WorkspaceView = 'chat' | 'graph' | 'wrongbook'
 
 const providerLabels: Record<ModelProviderId, string> = {
   ollama: '本地',
+  lmstudio: 'LM Studio',
   deepseek: 'DeepSeek',
   qwen: '通义千问',
   custom: '自定义 API',
 }
 
 const fallbackModelCatalog: ModelCatalog = {
-  default: { provider: 'ollama', model: 'qwen3.5:2b' },
+  default: { provider: 'lmstudio', model: 'qwen/qwen3.5-9b' },
   providers: [
+    {
+      id: 'lmstudio',
+      label: '本地 LM Studio',
+      description: '通过本机 OpenAI 兼容接口运行模型，数据不离开本机',
+      models: ['qwen/qwen3.5-9b'],
+      default_model: 'qwen/qwen3.5-9b',
+      base_url: 'http://127.0.0.1:1234/v1',
+      requires_api_key: false,
+      configured: true,
+    },
     {
       id: 'ollama',
       label: '本地 Ollama',
@@ -124,21 +141,18 @@ const quickPrompts = [
     eyebrow: '概念答疑',
     title: 'PN 结为什么具有单向导电性？',
     hint: '从势垒与载流子运动解释',
-    mode: 'answer' as ChatMode,
   },
   {
     icon: <BrainCircuit size={19} />,
     eyebrow: '分步计算',
     title: '二极管导通后该如何建立等效电路？',
     hint: '结合恒压降模型进行分析',
-    mode: 'answer' as ChatMode,
   },
   {
     icon: <WandSparkles size={19} />,
     eyebrow: '同类出题',
     title: '根据二极管伏安特性出一道基础题',
     hint: '生成新参数并用 SymPy 验算',
-    mode: 'quiz' as ChatMode,
   },
 ]
 
@@ -170,6 +184,8 @@ function Sidebar({
   onSelectSession,
   onDeleteSession,
   onNewSession,
+  activeView,
+  onNavigate,
 }: {
   open: boolean
   onClose: () => void
@@ -178,8 +194,11 @@ function Sidebar({
   onSelectSession: (sessionId: string) => void
   onDeleteSession: (sessionId: string, title: string) => void
   onNewSession: () => void
+  activeView: WorkspaceView
+  onNavigate: (view: WorkspaceView) => void
 }) {
   const modelProvider = useChatStore((state) => state.modelConfig.provider)
+  const streaming = useChatStore((state) => state.streaming)
   return (
     <>
       {open && <button className="sidebar-backdrop" onClick={onClose} aria-label="关闭导航" />}
@@ -195,26 +214,26 @@ function Sidebar({
           </button>
         </div>
 
-        <Button className="new-chat-button" icon={<Plus size={16} />} onClick={onNewSession} block>
+        <Button className="new-chat-button" icon={<Plus size={16} />} onClick={onNewSession} disabled={streaming} block>
           开始新对话
         </Button>
 
         <nav className="main-nav" aria-label="学生端主导航">
           <div className="nav-label">学习空间</div>
-          <button className="nav-item active">
+          <button className={`nav-item ${activeView === 'chat' ? 'active' : ''}`} onClick={() => onNavigate('chat')}>
             <MessageSquareText size={17} />
             <span>智能学习台</span>
-            <span className="nav-live-dot" />
+            {activeView === 'chat' && <span className="nav-live-dot" />}
           </button>
-          <button className="nav-item">
+          <button className={`nav-item ${activeView === 'graph' ? 'active' : ''}`} onClick={() => onNavigate('graph')}>
             <BookOpen size={17} />
             <span>知识图谱</span>
-            <span className="soon-label">即将开放</span>
+            <ChevronRight size={14} />
           </button>
-          <button className="nav-item">
+          <button className={`nav-item ${activeView === 'wrongbook' ? 'active' : ''}`} onClick={() => onNavigate('wrongbook')}>
             <Layers3 size={17} />
             <span>错题本</span>
-            <span className="soon-label">即将开放</span>
+            <ChevronRight size={14} />
           </button>
         </nav>
 
@@ -230,6 +249,7 @@ function Sidebar({
                   className="recent-item"
                   onClick={() => onSelectSession(session.session_id)}
                   title={session.title}
+                  disabled={streaming}
                 >
                   <span className="recent-icon"><Clock3 size={14} /></span>
                   <span>
@@ -250,6 +270,7 @@ function Sidebar({
                     className="recent-delete"
                     aria-label={`删除历史对话 ${session.title}`}
                     title="删除历史对话"
+                    disabled={streaming}
                   >
                     <Trash2 size={14} />
                   </button>
@@ -271,7 +292,7 @@ function Sidebar({
             <span className="profile-avatar"><UserRound size={17} /></span>
             <span>
               <strong>电路学习者</strong>
-              <small>学生端 · {modelProvider === 'ollama' ? '本地模型' : '云端模型'}</small>
+              <small>学生端 · {['ollama', 'lmstudio'].includes(modelProvider) ? '本地模型' : '云端模型'}</small>
             </span>
           </div>
         </div>
@@ -280,7 +301,7 @@ function Sidebar({
   )
 }
 
-function Welcome({ onAsk }: { onAsk: (prompt: string, mode: ChatMode) => void }) {
+function Welcome({ onAsk }: { onAsk: (prompt: string) => void }) {
   return (
     <div className="welcome-wrap">
       <div className="welcome-hero">
@@ -297,7 +318,7 @@ function Welcome({ onAsk }: { onAsk: (prompt: string, mode: ChatMode) => void })
       </div>
       <div className="quick-grid">
         {quickPrompts.map((item) => (
-          <button key={item.title} className="quick-card" onClick={() => onAsk(item.title, item.mode)}>
+          <button key={item.title} className="quick-card" onClick={() => onAsk(item.title)}>
             <span className="quick-card-icon">{item.icon}</span>
             <span className="quick-card-copy">
               <small>{item.eyebrow}</small>
@@ -344,19 +365,20 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
   const activeSources = useChatStore((state) => state.activeSources)
   const knowledgeBase = useChatStore((state) => state.knowledgeBase)
   const modelProvider = useChatStore((state) => state.modelConfig.provider)
-  const mode = useChatStore((state) => state.mode)
   const messages = useChatStore((state) => state.messages)
   const current = statuses.find((item) => item.id === knowledgeBase)
   const latestAssistant = [...messages].reverse().find((item) => item.role === 'assistant')
-  const quizContext = mode === 'quiz' || latestAssistant?.agent === '出题 Agent'
+  const quizContext = latestAssistant?.agent === '出题 Agent'
+  const indexedDocuments = current?.indexed_documents ?? current?.documents ?? 0
+  const failedDocuments = current?.failed_documents ?? 0
   return (
     <aside className="knowledge-panel">
       <div className="panel-heading">
         <div>
-          <span className="panel-kicker">{quizContext ? 'SOURCE PROBLEM' : 'RAG CONTEXT'}</span>
-          <h2>{quizContext ? '原题依据' : '检索依据'}</h2>
+          <span className="panel-kicker">{quizContext ? 'QUIZ CONTEXT' : 'RAG CONTEXT'}</span>
+          <h2>{quizContext ? '命题依据' : '检索依据'}</h2>
         </div>
-        <Tooltip title={quizContext ? '出题 Agent 仅使用原题和会话历史，不调用知识库检索' : '检索结果已通过向量、BM25 与重排综合评分'}>
+        <Tooltip title={quizContext ? '命题智能体会综合教材定义、结构化题库与原题约束，并经过独立验算' : '检索结果已通过向量、BM25、来源多样化与重排综合评分'}>
           <HelpCircle size={17} />
         </Tooltip>
       </div>
@@ -364,8 +386,14 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
       <div className="kb-summary-card">
         <span className="kb-icon">{quizContext ? <BrainCircuit size={18} /> : <Database size={18} />}</span>
         <div>
-          <strong>{quizContext ? '原题驱动出题' : knowledgeBase === 'default' ? '默认课程知识库' : knowledgeBase}</strong>
-          <span>{quizContext ? '会话上下文 · 不检索知识库' : `${current?.chunks || 0} 个文本块 · ${current?.documents || 0} 份资料`}</span>
+          <strong>{quizContext ? '课程依据驱动命题' : knowledgeBase === 'default' ? '默认课程知识库' : knowledgeBase}</strong>
+          <span>
+            {quizContext
+              ? `${activeSources.length} 条教材 / 题库依据 · 已独立验算`
+              : failedDocuments
+                ? `${current?.documents || 0} 份资料 · ${indexedDocuments} 份可检索 · ${failedDocuments} 份待解析`
+                : `${current?.documents || 0} 份资料 · ${current?.questions || 0} 道题 · ${current?.relations || 0} 条关联`}
+          </span>
         </div>
         <span className={`kb-state ${quizContext ? 'ready' : current?.state || 'missing'}`}>
           {quizContext ? '已锁定' : current?.state === 'building' ? '构建中' : current?.state === 'ready' ? '就绪' : '待构建'}
@@ -373,11 +401,11 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
       </div>
 
       <div className="source-list">
-        {quizContext ? (
+        {quizContext && !activeSources.length ? (
           <div className="source-empty quiz-reference-empty">
             <span><WandSparkles size={22} /></span>
-            <strong>保持原题结构</strong>
-            <p>首次出题读取当前原题；“再出一道”会沿用最近题目的拓扑、已知量和分项设问。</p>
+            <strong>暂无可展示依据</strong>
+            <p>命题仍会执行结构检查；完善教材 OCR 后可显示跨教材依据。</p>
           </div>
         ) : activeSources.length ? (
           activeSources.slice(0, 5).map((source, index) => (
@@ -399,8 +427,8 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
           <ChevronRight size={15} />
         </button>
         <div className="privacy-note">
-          <span className={`privacy-dot ${modelProvider === 'ollama' ? '' : 'cloud'}`} />
-          {modelProvider === 'ollama' ? '资料与模型推理均保留在本机' : '提问内容将发送至所选模型 API'}
+          <span className={`privacy-dot ${['ollama', 'lmstudio'].includes(modelProvider) ? '' : 'cloud'}`} />
+          {['ollama', 'lmstudio'].includes(modelProvider) ? '资料与模型推理均保留在本机' : '提问内容将发送至所选模型 API'}
         </div>
       </div>
     </aside>
@@ -410,8 +438,8 @@ function KnowledgePanel({ statuses, onCreate }: { statuses: KBStatus[]; onCreate
 function ChatComposer({ onSend }: { onSend: (value: string) => void }) {
   const [value, setValue] = useState('')
   const fileInputRef = useRef<HTMLInputElement>(null)
-  const mode = useChatStore((state) => state.mode)
-  const setMode = useChatStore((state) => state.setMode)
+  const tutoringMode = useChatStore((state) => state.tutoringMode)
+  const setTutoringMode = useChatStore((state) => state.setTutoringMode)
   const streaming = useChatStore((state) => state.streaming)
   const stop = useChatStore((state) => state.stop)
   const pendingAttachments = useChatStore((state) => state.pendingAttachments)
@@ -435,14 +463,13 @@ function ChatComposer({ onSend }: { onSend: (value: string) => void }) {
     <div className="composer-shell">
       <div className="composer-card">
         <div className="composer-topline">
-          <Segmented<ChatMode>
+          <Segmented<TutoringMode>
             size="small"
-            value={mode}
-            onChange={setMode}
+            value={tutoringMode}
+            onChange={setTutoringMode}
             options={[
-              { label: '智能路由', value: 'auto' },
-              { label: 'AI 答疑', value: 'answer' },
-              { label: '同类出题', value: 'quiz' },
+              { label: '逐步引导模式', value: 'guided' },
+              { label: '完整解答模式', value: 'full' },
             ]}
           />
           <span className="composer-tip">Shift + Enter 换行</span>
@@ -504,7 +531,7 @@ function ChatComposer({ onSend }: { onSend: (value: string) => void }) {
               }
             }}
             autoSize={{ minRows: 1, maxRows: 5 }}
-            placeholder={mode === 'quiz' ? '粘贴原题，或描述想练习的知识点…' : '输入电路问题，支持 LaTeX 公式…'}
+            placeholder="输入题目、解题步骤或你想做的操作，系统会自动识别…"
             variant="borderless"
             aria-label="输入电路问题"
           />
@@ -538,21 +565,82 @@ function normalizeQuizTitle(content: string) {
   )
 }
 
-function Conversation() {
+function Conversation({ onWrongQuestionSaved }: { onWrongQuestionSaved: () => void }) {
   const messages = useChatStore((state) => state.messages)
   const streaming = useChatStore((state) => state.streaming)
   const stage = useChatStore((state) => state.stage)
   const stageAgent = useChatStore((state) => state.stageAgent)
+  const sessionId = useChatStore((state) => state.sessionId)
+  const knowledgeBase = useChatStore((state) => state.knowledgeBase)
+  const send = useChatStore((state) => state.send)
+  const [selecting, setSelecting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [saving, setSaving] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
+  const { message: toast } = AntApp.useApp()
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
   }, [messages, stage])
 
+  const toggleMessage = (messageId: string) => {
+    setSelectedIds((current) => {
+      const next = new Set(current)
+      if (next.has(messageId)) next.delete(messageId)
+      else next.add(messageId)
+      return next
+    })
+  }
+
+  const cancelSelection = () => {
+    setSelecting(false)
+    setSelectedIds(new Set())
+  }
+
+  const saveWrongQuestion = async () => {
+    const selectedMessages = messages.filter((item) => selectedIds.has(item.id) && item.content.trim())
+    if (!selectedMessages.length) {
+      toast.warning('请至少选择一条对话记录')
+      return
+    }
+    setSaving(true)
+    try {
+      await createWrongQuestion({
+        session_id: sessionId,
+        knowledge_base: knowledgeBase,
+        messages: selectedMessages.map((item) => ({
+          role: item.role,
+          content: item.content,
+          agent: item.agent,
+          model: item.model,
+          created_at: item.createdAt,
+        })),
+      })
+      toast.success(`已将 ${selectedMessages.length} 条对话保存为一道错题`)
+      cancelSelection()
+      onWrongQuestionSaved()
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '错题保存失败')
+    } finally {
+      setSaving(false)
+    }
+  }
+
   return (
     <div className="conversation">
       {messages.map((message, index) => (
-        <div key={message.id} className={`message-row ${message.role}`}>
+        <div key={message.id} className={`message-row ${message.role} ${selecting ? 'selectable' : ''} ${selectedIds.has(message.id) ? 'selected' : ''}`}>
+          {selecting && message.content && (
+            <button
+              type="button"
+              className="message-select-toggle"
+              aria-label={selectedIds.has(message.id) ? '取消选择这条对话' : '选择这条对话'}
+              aria-pressed={selectedIds.has(message.id)}
+              onClick={() => toggleMessage(message.id)}
+            >
+              {selectedIds.has(message.id) && <Check size={12} />}
+            </button>
+          )}
           {message.role === 'assistant' && (
             <span className="assistant-avatar"><LogoMark /></span>
           )}
@@ -561,7 +649,7 @@ function Conversation() {
               <div className="message-agent">
                 <span>{message.agent || (streaming && index === messages.length - 1 ? stageAgent || '多智能体助教' : '多智能体助教')}</span>
                 <Tag bordered={false} title={`${providerLabels[message.provider || 'ollama']} · ${message.model || ''}`}>
-                  {providerLabels[message.provider || 'ollama']} · {message.model || 'qwen3.5:2b'}
+                  {providerLabels[message.provider || 'lmstudio']} · {message.model || 'qwen/qwen3.5-9b'}
                 </Tag>
               </div>
             )}
@@ -592,11 +680,41 @@ function Conversation() {
                 <span>{stage || '正在准备…'}</span>
               </div>
             )}
+            {message.role === 'assistant'
+              && message.failed
+              && message.retryContent
+              && !streaming
+              && !messages.slice(index + 1).some((item) => item.role === 'assistant' && !item.failed && item.content.trim())
+              && (
+              <Button
+                size="small"
+                className="retry-answer-button"
+                icon={<RefreshCcw size={13} />}
+                onClick={() => void send(message.retryContent!, message.retryAttachmentIds)}
+              >
+                重新生成本题
+              </Button>
+            )}
           </div>
         </div>
       ))}
       {streaming && messages.at(-1)?.content && stage && (
         <div className="stage-pill"><span className="thinking-dots"><i /><i /><i /></span>{stageAgent} · {stage}</div>
+      )}
+      {!streaming && messages.some((message) => message.role === 'assistant' && message.content.trim()) && (
+        <div className={`wrong-question-toolbar ${selecting ? 'selecting' : ''}`}>
+          {selecting ? (
+            <>
+              <span>已选 {selectedIds.size} 条，将按当前顺序合并为一道错题</span>
+              <button type="button" onClick={cancelSelection}>取消</button>
+              <Button size="small" type="primary" loading={saving} disabled={!selectedIds.size} onClick={() => void saveWrongQuestion()}>保存错题</Button>
+            </>
+          ) : (
+            <button type="button" className="start-wrong-selection" onClick={() => setSelecting(true)}>
+              <BookmarkPlus size={13} /> 加入错题本
+            </button>
+          )}
+        </div>
       )}
       <div ref={endRef} />
     </div>
@@ -640,7 +758,7 @@ function ModelSettingsModal({
       toast.warning('请填写模型名称')
       return
     }
-    if (draft.provider !== 'ollama' && !draft.baseUrl.trim()) {
+    if (!['ollama', 'lmstudio'].includes(draft.provider) && !draft.baseUrl.trim()) {
       toast.warning('请填写 API Base URL')
       return
     }
@@ -661,7 +779,7 @@ function ModelSettingsModal({
   }
 
   const providerIcon = (id: ModelProviderId) => {
-    if (id === 'ollama') return <Cpu size={18} />
+    if (id === 'ollama' || id === 'lmstudio') return <Cpu size={18} />
     if (id === 'custom') return <ServerCog size={18} />
     return <Cloud size={18} />
   }
@@ -679,7 +797,7 @@ function ModelSettingsModal({
         <span className="modal-icon"><ServerCog size={22} /></span>
         <div>
           <h2>选择与配置模型</h2>
-          <p>本地模型从 Ollama 自动读取；云端模型通过 OpenAI 兼容接口接入。</p>
+          <p>本地模型可从 LM Studio 或 Ollama 自动读取；云端模型通过 OpenAI 兼容接口接入。</p>
         </div>
       </div>
 
@@ -706,7 +824,7 @@ function ModelSettingsModal({
       <div className="model-config-panel">
         <div className="model-field">
           <label>模型名称</label>
-          {draft.provider === 'ollama' ? (
+          {['ollama', 'lmstudio'].includes(draft.provider) ? (
             <Select
               value={draft.model}
               options={provider.models.map((model) => ({ value: model, label: model }))}
@@ -736,7 +854,7 @@ function ModelSettingsModal({
           )}
         </div>
 
-        {draft.provider !== 'ollama' && (
+        {!['ollama', 'lmstudio'].includes(draft.provider) && (
           <>
             <div className="model-field">
               <label>API Key</label>
@@ -765,10 +883,10 @@ function ModelSettingsModal({
           </>
         )}
 
-        <div className={`model-security-note ${draft.provider === 'ollama' ? 'local' : 'cloud'}`}>
+        <div className={`model-security-note ${['ollama', 'lmstudio'].includes(draft.provider) ? 'local' : 'cloud'}`}>
           <ShieldCheck size={16} />
           <span>
-            {draft.provider === 'ollama'
+            {['ollama', 'lmstudio'].includes(draft.provider)
               ? '模型在本机运行；题目、检索上下文和回答不会发送到第三方模型服务。'
               : '使用云端模型时，题目、最近对话及检索上下文会发送到所选 API；配置和 API Key 会保存在此浏览器的本地存储中，不写入项目文件。'}
           </span>
@@ -785,20 +903,24 @@ function ModelSettingsModal({
 
 function StudentPageContent() {
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [activeView, setActiveView] = useState<WorkspaceView>('chat')
+  const [learningDataVersion, setLearningDataVersion] = useState(0)
   const [kbModalOpen, setKbModalOpen] = useState(false)
   const [modelModalOpen, setModelModalOpen] = useState(false)
   const [newKbName, setNewKbName] = useState('')
+  const [kbFiles, setKbFiles] = useState<UploadFile[]>([])
+  const [documentType, setDocumentType] = useState<'auto' | 'textbook' | 'exam' | 'question_bank' | 'notes'>('auto')
+  const [ingesting, setIngesting] = useState(false)
   const [statuses, setStatuses] = useState<KBStatus[]>([])
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [modelCatalog, setModelCatalog] = useState<ModelCatalog>(fallbackModelCatalog)
   const messages = useChatStore((state) => state.messages)
   const sessionId = useChatStore((state) => state.sessionId)
-  const mode = useChatStore((state) => state.mode)
-  const setMode = useChatStore((state) => state.setMode)
   const send = useChatStore((state) => state.send)
   const knowledgeBase = useChatStore((state) => state.knowledgeBase)
   const setKnowledgeBase = useChatStore((state) => state.setKnowledgeBase)
   const modelConfig = useChatStore((state) => state.modelConfig)
+  const streaming = useChatStore((state) => state.streaming)
   const loadSession = useChatStore((state) => state.loadSession)
   const clear = useChatStore((state) => state.clear)
   const { message: toast } = AntApp.useApp()
@@ -807,7 +929,7 @@ function StudentPageContent() {
     try {
       setStatuses(await fetchKnowledgeBases())
     } catch {
-      setStatuses([{ id: 'default', state: 'missing', documents: 0, chunks: 0, message: '后端未连接' }])
+      setStatuses([{ id: 'default', state: 'missing', documents: 0, chunks: 0, questions: 0, relations: 0, message: '后端未连接' }])
     }
   }
 
@@ -844,15 +966,24 @@ function StudentPageContent() {
     return base
   }, [statuses, knowledgeBase])
 
-  const ask = (prompt: string, preferredMode?: ChatMode) => {
-    if (preferredMode) setMode(preferredMode)
+  const ask = (prompt: string) => {
     void send(prompt).then(() => refreshSessions())
   }
 
   const selectHistorySession = async (selectedSessionId: string) => {
+    if (selectedSessionId === sessionId) {
+      setActiveView('chat')
+      setSidebarOpen(false)
+      return
+    }
+    if (streaming) {
+      toast.info('当前回答仍在生成，请先停止生成再切换会话')
+      return
+    }
     try {
       const stored = await fetchSession(selectedSessionId)
       loadSession(selectedSessionId, stored)
+      setActiveView('chat')
       setSidebarOpen(false)
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '历史会话恢复失败')
@@ -860,11 +991,20 @@ function StudentPageContent() {
   }
 
   const startNewSession = () => {
+    if (streaming) {
+      toast.info('当前回答仍在生成，请先停止生成再开始新对话')
+      return
+    }
     clear()
+    setActiveView('chat')
     setSidebarOpen(false)
   }
 
   const deleteHistorySession = async (deletedSessionId: string, title: string) => {
+    if (streaming) {
+      toast.info('当前回答仍在生成，请完成或停止后再删除会话')
+      return
+    }
     try {
       await deleteSession(deletedSessionId)
       setSessions((current) => current.filter((item) => item.session_id !== deletedSessionId))
@@ -878,16 +1018,23 @@ function StudentPageContent() {
     }
   }
 
-  const uploadRequest: NonNullable<UploadProps['customRequest']> = async (options) => {
+  const ingestFiles = async () => {
+    if (!kbFiles.length) {
+      toast.warning('请先选择教材、试卷或题库文件')
+      return
+    }
+    setIngesting(true)
     try {
-      const result = await uploadKnowledgeFile(options.file as File, knowledgeBase)
-      options.onSuccess?.(result)
+      const files = kbFiles.map((item) => (item.originFileObj || item) as File)
+      const result = await uploadKnowledgeFiles(files, knowledgeBase, documentType)
       toast.success(result.message)
+      setKbFiles([])
       void refreshStatuses()
     } catch (error) {
       const detail = error instanceof Error ? error.message : '上传失败'
-      options.onError?.(new Error(detail))
       toast.error(detail)
+    } finally {
+      setIngesting(false)
     }
   }
 
@@ -912,6 +1059,8 @@ function StudentPageContent() {
         onSelectSession={(selectedSessionId) => void selectHistorySession(selectedSessionId)}
         onDeleteSession={(deletedSessionId, title) => void deleteHistorySession(deletedSessionId, title)}
         onNewSession={startNewSession}
+        activeView={activeView}
+        onNavigate={(view) => { setActiveView(view); setSidebarOpen(false) }}
       />
       <main className="main-workspace">
         <header className="topbar">
@@ -919,7 +1068,7 @@ function StudentPageContent() {
             <button className="menu-button" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Menu size={19} /></button>
             <div>
               <span className="breadcrumb">学生工作台 /</span>
-              <strong>{mode === 'quiz' ? '同类题生成' : mode === 'answer' ? '课程答疑' : '智能学习'}</strong>
+              <strong>{activeView === 'graph' ? '知识图谱' : activeView === 'wrongbook' ? '错题本' : '智能学习台'}</strong>
             </div>
           </div>
           <div className="topbar-actions">
@@ -937,7 +1086,7 @@ function StudentPageContent() {
               onClick={() => setModelModalOpen(true)}
               aria-label="选择和配置模型"
             >
-              <span className={`online-dot ${modelConfig.provider === 'ollama' ? '' : 'cloud'}`} />
+              <span className={`online-dot ${['ollama', 'lmstudio'].includes(modelConfig.provider) ? '' : 'cloud'}`} />
               <span>{modelConfig.model}</span>
               <small>{providerLabels[modelConfig.provider]}</small>
               <ChevronDown size={13} />
@@ -945,15 +1094,27 @@ function StudentPageContent() {
           </div>
         </header>
 
-        <section className="learning-grid">
-          <div className="chat-column">
-            <div className="chat-scroll">
-              {messages.length === 0 ? <Welcome onAsk={ask} /> : <Conversation />}
+        {activeView === 'chat' ? (
+          <section className="learning-grid">
+            <div className="chat-column">
+              <div className="chat-scroll">
+                {messages.length === 0 ? <Welcome onAsk={ask} /> : (
+                  <Conversation onWrongQuestionSaved={() => setLearningDataVersion((value) => value + 1)} />
+                )}
+              </div>
+              <ChatComposer onSend={ask} />
             </div>
-            <ChatComposer onSend={(value) => ask(value)} />
-          </div>
-          <KnowledgePanel statuses={statuses} onCreate={() => setKbModalOpen(true)} />
-        </section>
+            <KnowledgePanel statuses={statuses} onCreate={() => setKbModalOpen(true)} />
+          </section>
+        ) : activeView === 'graph' ? (
+          <KnowledgeGraphView
+            knowledgeBase={knowledgeBase}
+            refreshKey={learningDataVersion}
+            onOpenWrongBook={() => setActiveView('wrongbook')}
+          />
+        ) : (
+          <WrongNotebookView refreshKey={learningDataVersion} />
+        )}
       </main>
 
       <ModelSettingsModal
@@ -974,7 +1135,7 @@ function StudentPageContent() {
           <span className="modal-icon"><Database size={22} /></span>
           <div>
             <h2>扩充课程知识库</h2>
-            <p>上传教材、讲义或题库后，系统会自动清洗、分块、嵌入并重建索引。</p>
+            <p>批量导入教材与试卷后，系统会自动分类、抽取题目，并把题目关联到教材知识。</p>
           </div>
         </div>
         <div className="modal-section">
@@ -990,19 +1151,42 @@ function StudentPageContent() {
           />
           <Button onClick={createKnowledgeBase}>新建并切换</Button>
         </div>
+        <div className="modal-section">
+          <label>资料类型</label>
+          <Select
+            value={documentType}
+            onChange={setDocumentType}
+            style={{ width: '100%' }}
+            options={[
+              { value: 'auto', label: '自动识别（推荐）' },
+              { value: 'textbook', label: '教材 / 讲义' },
+              { value: 'exam', label: '试卷' },
+              { value: 'question_bank', label: '结构化题库' },
+              { value: 'notes', label: '课程笔记' },
+            ]}
+          />
+        </div>
         <Upload.Dragger
-          multiple={false}
+          multiple
           accept=".pdf,.md,.txt,.docx,.xlsx,.json"
-          customRequest={uploadRequest}
-          showUploadList
+          fileList={kbFiles}
+          beforeUpload={(file) => {
+            setKbFiles((current) => current.length >= 20 ? current : [...current, file])
+            return false
+          }}
+          onRemove={(file) => setKbFiles((current) => current.filter((item) => item.uid !== file.uid))}
+          showUploadList={{ showRemoveIcon: true }}
           className="kb-dragger"
         >
           <p className="ant-upload-drag-icon"><UploadCloud size={28} /></p>
-          <p className="ant-upload-text">拖入教材或题库，或点击选择文件</p>
-          <p className="ant-upload-hint">支持 PDF、Word、Markdown、Excel、JSON，单文件最大 80 MB</p>
+          <p className="ant-upload-text">拖入多份教材、试卷或题库，或点击选择</p>
+          <p className="ant-upload-hint">每批最多 20 个文件；PDF、Word、Markdown、Excel、JSON，单文件最大 80 MB</p>
         </Upload.Dragger>
+        <Button type="primary" block loading={ingesting} disabled={!kbFiles.length} onClick={() => void ingestFiles()}>
+          导入并构建知识库 / 题库
+        </Button>
         <div className="modal-note">
-          <Check size={15} /> 新知识库构建期间可继续使用其他已就绪知识库
+          <Check size={15} /> 构建结果会保留来源页码、题目候选、教材关联和解析警告
         </div>
       </Modal>
     </div>

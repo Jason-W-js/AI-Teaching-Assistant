@@ -30,6 +30,7 @@ def main() -> None:
         output_dir,
         settings.embedding_model_path,
         chapter_limit=None if args.full else args.chapter_limit,
+        pdf_extractor_url=settings.pdf_extractor_url,
     )
     print(json.dumps(meta, ensure_ascii=False, indent=2))
 

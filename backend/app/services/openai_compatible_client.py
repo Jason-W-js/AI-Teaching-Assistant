@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import base64
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -27,38 +28,90 @@ class OpenAICompatibleClient:
         *,
         provider: str,
         model: str,
-        api_key: str,
+        api_key: str = "",
         base_url: str,
+        allow_images: bool = False,
+        trust_env: bool = True,
     ) -> None:
         self.provider = provider
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.supports_images = allow_images
+        # LM Studio versions differ in their support for OpenAI's
+        # response_format field. The model is already explicitly prompted for
+        # JSON, so avoid a known first-request 400 and remember capability
+        # failures for other compatible providers as well.
+        self._json_response_format_supported: bool | None = (
+            False if provider == "lmstudio" else None
+        )
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         self._client = httpx.AsyncClient(
-            timeout=httpx.Timeout(240.0, connect=15.0),
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
+            # The API layer owns the 600-second first-token deadline.  Do not
+            # impose a second read/total deadline after visible output begins.
+            timeout=httpx.Timeout(None, connect=15.0),
+            headers=headers,
+            trust_env=trust_env,
         )
 
     @property
     def endpoint(self) -> str:
         return f"{self.base_url}/chat/completions"
 
+    @property
+    def models_endpoint(self) -> str:
+        return f"{self.base_url}/models"
+
     async def close(self) -> None:
         await self._client.aclose()
 
     @staticmethod
-    def _messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-        # Attachment images are interpreted by the platform's local Qwen vision
-        # node first. Remote text providers receive only that structured result.
+    def _image_mime(encoded: str) -> str:
+        try:
+            prefix = base64.b64decode(encoded[:48], validate=False)
+        except (ValueError, TypeError):
+            return "image/jpeg"
+        if prefix.startswith(b"\x89PNG"):
+            return "image/png"
+        if prefix.startswith(b"RIFF") and b"WEBP" in prefix:
+            return "image/webp"
+        return "image/jpeg"
+
+    def _messages(self, messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        converted: list[dict[str, Any]] = []
+        for message in messages:
+            content: Any = str(message.get("content", ""))
+            images = message.get("images") or []
+            if self.supports_images and images:
+                content = [{"type": "text", "text": content}]
+                content.extend(
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{self._image_mime(image)};base64,{image}"
+                        },
+                    }
+                    for image in images
+                )
+            converted.append({"role": str(message.get("role", "user")), "content": content})
+        return converted
+
+    async def list_models(self) -> list[str]:
+        response = await self._client.get(self.models_endpoint, timeout=5.0)
+        response.raise_for_status()
         return [
-            {
-                "role": str(message.get("role", "user")),
-                "content": str(message.get("content", "")),
-            }
-            for message in messages
+            str(item.get("id"))
+            for item in response.json().get("data", [])
+            if item.get("id")
         ]
+
+    async def health(self) -> dict[str, Any]:
+        try:
+            models = await self.list_models()
+            return {"ok": self.model in models, "model": self.model, "models": models}
+        except Exception as exc:  # pragma: no cover - depends on local service
+            return {"ok": False, "model": self.model, "models": [], "error": str(exc)}
 
     @staticmethod
     def _error_detail(response: httpx.Response) -> str:
@@ -96,16 +149,20 @@ class OpenAICompatibleClient:
             "stream": False,
             "max_tokens": settings.remote_max_tokens,
         }
-        if json_mode:
+        if json_mode and self._json_response_format_supported is not False:
             payload["response_format"] = {"type": "json_object"}
         try:
             response = await self._post(payload)
         except ModelAPIError as exc:
-            if not json_mode or exc.status_code != 400:
+            if "response_format" not in payload or exc.status_code != 400:
                 raise
             # Some OpenAI-compatible implementations do not expose JSON grammar.
+            self._json_response_format_supported = False
             payload.pop("response_format", None)
             response = await self._post(payload)
+        else:
+            if "response_format" in payload:
+                self._json_response_format_supported = True
         data = response.json()
         choices = data.get("choices") or []
         content = choices[0].get("message", {}).get("content", "") if choices else ""
