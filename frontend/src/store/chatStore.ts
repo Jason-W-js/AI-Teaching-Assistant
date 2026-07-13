@@ -31,15 +31,15 @@ const sessionKey = 'circuitmind-session-id'
 const studentKey = 'circuitmind-student-id'
 const modelConfigKey = 'circuitmind-model-config'
 const defaultKnowledgeBaseKey = 'circuitmind-default-knowledge-base'
-export const CHAT_MODEL_PROVIDER: ModelProviderId = 'qwen'
-export const CHAT_MODEL = 'qwen3-vl-flash'
-export const QWEN_CHAT_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+export const CHAT_MODEL_PROVIDER: ModelProviderId = 'ollama'
+export const CHAT_MODEL = 'qwen3.5:2b'
+const QWEN_VL_FALLBACK_MODEL = 'qwen3-vl-flash'
 
 const defaultModelConfig: ModelConfig = {
   provider: CHAT_MODEL_PROVIDER,
   model: CHAT_MODEL,
   apiKey: '',
-  baseUrl: QWEN_CHAT_BASE_URL,
+  baseUrl: 'http://127.0.0.1:11434',
 }
 
 function getSessionId() {
@@ -51,16 +51,26 @@ function getSessionId() {
   return value
 }
 
-function fixedChatModelConfig(value: Partial<ModelConfig>): ModelConfig {
-  const qwenConfig = value.provider === CHAT_MODEL_PROVIDER
+function canonicalModel(provider: ModelProviderId, model: string) {
+  const normalized = model.trim()
+  if (provider !== 'qwen') return normalized
+  const canonical = normalized.toLowerCase()
+  if (canonical === 'qwen3-vl-embedding' || canonical === 'qwen3-vl-8b-instruct') {
+    return QWEN_VL_FALLBACK_MODEL
+  }
+  return canonical
+}
+
+function normalizedModelConfig(value: Partial<ModelConfig>): ModelConfig {
+  const providers: ModelProviderId[] = ['ollama', 'deepseek', 'qwen', 'custom']
+  if (!value.provider || !providers.includes(value.provider) || typeof value.model !== 'string') {
+    return defaultModelConfig
+  }
   return {
-    provider: CHAT_MODEL_PROVIDER,
-    model: CHAT_MODEL,
-    apiKey: qwenConfig && typeof value.apiKey === 'string' ? value.apiKey : '',
-    baseUrl:
-      qwenConfig && typeof value.baseUrl === 'string' && value.baseUrl.trim()
-        ? value.baseUrl.trim()
-        : QWEN_CHAT_BASE_URL,
+    provider: value.provider,
+    model: canonicalModel(value.provider, value.model || defaultModelConfig.model),
+    apiKey: typeof value.apiKey === 'string' ? value.apiKey : '',
+    baseUrl: typeof value.baseUrl === 'string' ? value.baseUrl.trim() : '',
   }
 }
 
@@ -76,7 +86,7 @@ function getStudentId() {
 function getModelConfig(): ModelConfig {
   try {
     const stored = JSON.parse(localStorage.getItem(modelConfigKey) || '{}')
-    const config = fixedChatModelConfig(stored)
+    const config = normalizedModelConfig(stored)
     localStorage.setItem(modelConfigKey, JSON.stringify(config))
     return config
   } catch {
@@ -187,7 +197,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }))
   },
   setModelConfig: (modelConfig) => {
-    const normalized = fixedChatModelConfig(modelConfig)
+    const normalized = normalizedModelConfig(modelConfig)
     localStorage.setItem(modelConfigKey, JSON.stringify(normalized))
     set({ modelConfig: normalized })
   },

@@ -523,7 +523,7 @@ class CircuitTutorEngine:
             await _emit(
                 state,
                 "vision",
-                "qwen3-vl-flash 正在识别图片或文档中的电路、公式与题目",
+                f"{getattr(state.get('llm'), 'model', '当前模型')} 正在识别图片或文档中的电路、公式与题目",
                 "视觉理解 Agent",
             )
             prompt = (

@@ -198,9 +198,9 @@ def test_router_uses_model_to_select_learning_plan_intent():
     assert routed["intent"] == "plan"
 
 
-def test_attachment_analysis_uses_qwen3_vl_flash_client():
-    class FakeQwenFlash:
-        model = "qwen3-vl-flash"
+def test_attachment_analysis_uses_request_selected_client():
+    class FakeSelectedModel:
+        model = "configured-answer-model"
 
         def __init__(self):
             self.calls = 0
@@ -210,7 +210,7 @@ def test_attachment_analysis_uses_qwen3_vl_flash_client():
             assert messages[0]["images"] == ["image-base64"]
             return '{"transcription":"求电流","topology":"串联电路"}'
 
-    client = FakeQwenFlash()
+    client = FakeSelectedModel()
     engine = object.__new__(CircuitTutorEngine)
     engine.ollama = object()
     result = asyncio.run(engine._analyze_attachments({

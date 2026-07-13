@@ -27,6 +27,7 @@ import {
   CircleStop,
   Cloud,
   Clock3,
+  Cpu,
   Database,
   FileText,
   ExternalLink,
@@ -997,14 +998,25 @@ function ModelSettingsModal({
     if (open) setDraft(active)
   }, [open, active])
 
-  const provider = catalog.providers.find((item) => item.id === CHAT_MODEL_PROVIDER)
-    || fallbackModelCatalog.providers.find((item) => item.id === CHAT_MODEL_PROVIDER)!
-  const selectableModels = [{
-    value: CHAT_MODEL,
-    label: CHAT_MODEL,
+  const provider = catalog.providers.find((item) => item.id === draft.provider)
+    || fallbackModelCatalog.providers[0]
+  const selectableModels = provider.model_options || provider.models.map((model) => ({
+    value: model,
+    label: model,
     disabled: false,
-    description: '对话答题与图片/文档附件识别',
-  }]
+    description: '',
+  }))
+
+  const chooseProvider = (id: ModelProviderId) => {
+    const next = catalog.providers.find((item) => item.id === id)
+      || fallbackModelCatalog.providers.find((item) => item.id === id)!
+    setDraft({
+      provider: id,
+      model: next.default_model || '',
+      apiKey: '',
+      baseUrl: next.base_url,
+    })
+  }
 
   const applyModel = () => {
     if (!draft.model.trim()) {
@@ -1026,7 +1038,7 @@ function ModelSettingsModal({
     }
     setModelConfig({ ...draft, model: draft.model.trim(), baseUrl: draft.baseUrl.trim() })
     onClose()
-    toast.success('qwen3-vl-flash 配置已保存')
+    toast.success(`已切换到 ${draft.model.trim()}`)
   }
 
   const clearSavedApiKey = () => {
@@ -1034,6 +1046,12 @@ function ModelSettingsModal({
     setModelConfig(cleared)
     setDraft((value) => ({ ...value, apiKey: '' }))
     toast.success('已清除当前浏览器保存的 API Key')
+  }
+
+  const providerIcon = (id: ModelProviderId) => {
+    if (id === 'ollama') return <Cpu size={18} />
+    if (id === 'custom') return <ServerCog size={18} />
+    return <Cloud size={18} />
   }
 
   return (
@@ -1048,20 +1066,29 @@ function ModelSettingsModal({
       <div className="modal-heading model-modal-heading">
         <span className="modal-icon"><ServerCog size={22} /></span>
         <div>
-          <h2>配置多模态模型</h2>
-          <p>对话答题、图片和文档附件识别统一使用 qwen3-vl-flash。</p>
+          <h2>选择与配置模型</h2>
+          <p>答题与附件识别使用当前模型；检索可临时调用专用模型，最终仍由当前模型回答。</p>
         </div>
       </div>
 
-      <div className="provider-grid" aria-label="固定模型提供商">
-        <div className="provider-card active">
-          <span className="provider-icon"><Cloud size={18} /></span>
-          <span>
-            <strong>{provider.label}</strong>
-            <small>统一承载文本答题与多模态附件识别</small>
-          </span>
-          <Check size={15} className="provider-check" />
-        </div>
+      <div className="provider-grid" role="radiogroup" aria-label="模型提供商">
+        {catalog.providers.map((item) => (
+          <button
+            type="button"
+            role="radio"
+            aria-checked={draft.provider === item.id}
+            key={item.id}
+            className={`provider-card ${draft.provider === item.id ? 'active' : ''}`}
+            onClick={() => chooseProvider(item.id)}
+          >
+            <span className="provider-icon">{providerIcon(item.id)}</span>
+            <span>
+              <strong>{item.label}</strong>
+              <small>{item.description}</small>
+            </span>
+            {draft.provider === item.id && <Check size={15} className="provider-check" />}
+          </button>
+        ))}
       </div>
 
       <div className="model-config-panel">
@@ -1075,8 +1102,9 @@ function ModelSettingsModal({
                 label: option.description ? `${option.label} · ${option.description}` : option.label,
                 disabled: option.disabled,
               }))}
+              onChange={(model) => setDraft((value) => ({ ...value, model }))}
               style={{ width: '100%' }}
-              disabled
+              showSearch
               aria-label="选择模型"
             />
           ) : (
@@ -1131,7 +1159,7 @@ function ModelSettingsModal({
 
       <div className="model-modal-actions">
         <Button onClick={onClose}>取消</Button>
-        <Button type="primary" onClick={applyModel}>保存配置</Button>
+        <Button type="primary" onClick={applyModel}>应用模型</Button>
       </div>
     </Modal>
   )
@@ -1509,7 +1537,7 @@ function StudentPageContent() {
               type="button"
               className="model-badge model-picker-button"
               onClick={() => setModelModalOpen(true)}
-              aria-label="配置 qwen3-vl-flash"
+              aria-label={`配置 ${modelConfig.model}`}
             >
               <span className={`online-dot ${modelConfig.provider === 'ollama' ? '' : 'cloud'}`} />
               <span>{modelConfig.model}</span>

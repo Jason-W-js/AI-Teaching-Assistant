@@ -18,13 +18,13 @@ from backend.app.services.model_catalog import (
 )
 
 
-def test_chat_request_defaults_to_qwen3_vl_flash():
+def test_chat_request_defaults_to_local_model():
     request = ChatRequest(session_id="student-demo", message="测试")
-    assert request.model_provider == "qwen"
-    assert request.model == "qwen3-vl-flash"
+    assert request.model_provider == "ollama"
+    assert request.model == "qwen3.5:2b"
 
 
-def test_student_chat_overrides_previous_selection_with_qwen3_vl_flash(monkeypatch):
+def test_student_chat_uses_request_selected_model(monkeypatch):
     monkeypatch.setattr(
         main_module,
         "settings",
@@ -41,12 +41,55 @@ def test_student_chat_overrides_previous_selection_with_qwen3_vl_flash(monkeypat
         api_key="deepseek-key",
         base_url="https://deepseek.example/v1",
     )
-    client, should_close = main_module.select_chat_model_client(payload)
+    client, should_close = main_module.select_model_client(payload)
     assert should_close is True
-    assert client.provider == "qwen"
-    assert client.model == "qwen3-vl-flash"
-    assert client.base_url == "https://dashscope.example/v1"
+    assert client.provider == "deepseek"
+    assert client.model == "deepseek-v4-flash"
+    assert client.base_url == "https://deepseek.example/v1"
     asyncio.run(client.close())
+
+
+def test_knowledge_build_uses_specialist_without_changing_chat_model(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        SimpleNamespace(
+            qwen_api_key="server-qwen-key",
+            qwen_base_url="https://dashscope.example/v1",
+        ),
+    )
+
+    config = main_module.knowledge_build_model_config(
+        "deepseek",
+        "deepseek-key",
+        "https://deepseek.example/v1",
+    )
+
+    assert config.provider == "qwen"
+    assert config.model == "qwen3-vl-flash"
+    assert config.api_key == "server-qwen-key"
+    assert config.base_url == "https://dashscope.example/v1"
+
+
+def test_knowledge_build_can_reuse_explicit_qwen_credentials(monkeypatch):
+    monkeypatch.setattr(
+        main_module,
+        "settings",
+        SimpleNamespace(
+            qwen_api_key="server-qwen-key",
+            qwen_base_url="https://dashscope.example/v1",
+        ),
+    )
+
+    config = main_module.knowledge_build_model_config(
+        "qwen",
+        "browser-qwen-key",
+        "https://workspace.example/v1",
+    )
+
+    assert config.model == "qwen3-vl-flash"
+    assert config.api_key == "browser-qwen-key"
+    assert config.base_url == "https://workspace.example/v1"
 
 
 def test_custom_provider_requires_key_and_base_url():

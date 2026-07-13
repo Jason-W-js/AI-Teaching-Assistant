@@ -4,16 +4,16 @@
 
 已跑通的链路：
 
-- 学生端对话答题及图片/文档附件识别固定使用 `qwen3-vl-flash`；私有思考字段不会返回前端。
+- 学生端对话答题及图片/文档附件识别使用页面当前配置的模型；私有思考字段不会返回前端。
 - LangGraph 编排的大模型路由 Agent、答疑 Agent、检索 Agent、出题 Agent、学习规划 Agent 和 SymPy 验算 Agent；学习规划会结合知识库资料生成可执行路线。
 - 图片出题先提取“电路拓扑、已知量、特殊条件、待求量”蓝图；连续“再出一道”会沿用最近生成题，同类题不调用知识库检索并必须通过同构校验。
 - 教材清洗、章节/段落语义切分、章/节/原始页码元数据、384 维向量化和 populated FAISS/Qdrant 索引；Excel/JSON 题库与课程知识库严格隔离。
 - 向量语义检索 + BM25 关键词检索 + 规则重排。
 - FastAPI、CORS、统一异常处理、日志、POST SSE 真正 token 流式输出、上传与后台重建知识库。
 - Redis 最近 N 轮会话记忆；Redis 不可用时自动切换本地持久化记忆，服务重启后仍可执行出题去重。
-- 学生交互栏支持题目图片和 PDF/Word/Excel/Markdown 等附件；PDF 页面和 Office 内嵌图片会交给 `qwen3-vl-flash` 识别公式、电路图与题干。
+- 学生交互栏支持题目图片和 PDF/Word/Excel/Markdown 等附件；PDF 页面和 Office 内嵌图片会交给当前配置且支持视觉输入的模型识别公式、电路图与题干。
 - React + TypeScript + Ant Design + Zustand + KaTeX 学生端，含 LaTeX 定界符容错预处理。
-- 右上角可配置通义千问 API Key 与 Base URL；配置会保存在当前浏览器，也可通过后端环境变量提供。
+- 右上角可切换本地 Ollama、DeepSeek、通义千问或自定义兼容 API；配置会保存在当前浏览器，也可通过后端环境变量提供。
 - 左侧“最近学习”读取持久化会话列表，支持点击恢复历史对话；刷新页面后会自动恢复当前会话。
 - 学生端知识图谱默认展示聚合后的“教材—页面—知识点—电路图—去重元件”语义关系；公式、文本片段和网络节点保留在底层图中作为检索证据，不直接铺到画布上。
 - 答疑和出题内容均可加入持久化错题本；归档前自动提取知识点，错题页可按薄弱点发起知识补全与巩固规划。
@@ -56,7 +56,7 @@ flowchart LR
   W --> H[向量 + BM25 + Rerank]
   H --> V[(FAISS + Chunk 元数据)]
   LP --> H
-  A --> L[qwen3-vl-flash]
+  A --> L[当前配置的回答模型]
   K --> L
   Q --> P[知识点校验 + 会话去重 + SymPy 验算]
   API --> U[上传与后台知识库重建]
@@ -97,16 +97,15 @@ powershell -ExecutionPolicy Bypass -File scripts/start.ps1
 
 打开 `http://127.0.0.1:8000/student`。生产构建由 FastAPI 直接提供；开发前端可在 `frontend` 中运行 `npm run dev`，Vite 会代理 `/api` 到 8000 端口。
 
-## 模型与 API 配置
+## 模型切换与 API 配置
 
-学生端统一使用 `qwen3-vl-flash` 完成：
+点击学生端右上角的模型名称可选择本地 Ollama、DeepSeek、通义千问或自定义 OpenAI 兼容 API。当前选择同时用于文本答题和附件理解，最终答案始终由该模型生成。
 
-- 普通文本问答、分步解题和学习规划。
-- PNG/JPEG/WebP/BMP 图片附件识别。
-- PDF 页面视觉识别，以及 DOCX/XLSX 中内嵌图片的识别；文档提取出的正文也会一并进入回答上下文。
-- 知识库上传或重建时的多模态分析。
+- 检索阶段可以临时调用文本或多模态 Embedding、BM25、知识图谱和重排器；这些专用模型只产生检索依据，不会替换当前回答模型。
+- `qwen3-vl-embedding` 仅用于知识库多模态向量化，不能作为聊天模型，因此在模型列表中保持禁用。
+- 上传或重建知识库仍固定使用 `qwen3-vl-flash` 做视觉/OCR 分析，并按需调用 `qwen3-vl-embedding`；完成后不会改变页面的回答模型配置。
 
-页面输入的 API Key 会写入当前浏览器的 `localStorage`，不会写入项目文件；配置弹窗提供清除入口。公用电脑不建议保存云端密钥。也可以在 `.env` 配置 `QWEN_API_KEY` 和 `QWEN_BASE_URL`。题目、最近对话、检索上下文及附件视觉内容会发送到通义千问 API。
+页面输入的模型配置和 API Key 会写入当前浏览器的 `localStorage`，不会写入项目文件；配置弹窗提供清除入口。公用电脑不建议保存云端密钥。也可以在 `.env` 配置对应服务的 API Key 和 Base URL。使用云端模型时，题目、最近对话、检索上下文及附件视觉内容会发送到所选 API。
 
 ## 环境重建
 
@@ -152,7 +151,7 @@ docker compose up -d redis
 
 Excel/JSON 题库不会进入 RAG 知识库，也不会参与检索或图谱构建。出题 Agent 只依据学生原题和会话历史生成同构变式。
 
-学生交互栏的回形针按钮可上传题目图片或文档附件。图片、PDF 页面及 Office 内嵌图片会由 `qwen3-vl-flash` 识别题干、公式、参数、连接关系和知识点，再进入答疑或同类出题工作流。每轮最多发送 `MAX_CHAT_DOCUMENT_IMAGES`（默认 6）张由文档产生的视觉页面或内嵌图片。
+学生交互栏的回形针按钮可上传题目图片或文档附件。图片、PDF 页面及 Office 内嵌图片会由当前配置且支持视觉输入的模型识别题干、公式、参数、连接关系和知识点，再由同一配置模型完成答疑或同类出题。每轮最多发送 `MAX_CHAT_DOCUMENT_IMAGES`（默认 6）张由文档产生的视觉页面或内嵌图片。
 
 ## 分层多模态图文知识库（v2.1）
 
@@ -193,14 +192,14 @@ docker compose up -d qdrant redis
   "mode": "auto",
   "knowledge_base": "default",
   "attachment_ids": [],
-  "model_provider": "qwen",
-  "model": "qwen3-vl-flash",
+  "model_provider": "ollama",
+  "model": "qwen3.5:2b",
   "api_key": "",
-  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  "base_url": "http://127.0.0.1:11434"
 }
 ```
 
-返回 SSE 事件：`connected`、`status`、`delta`、`meta`、`done`；错误为 `error`。答疑 Agent 通过 `qwen3-vl-flash` 实时返回 token，模型思维链不会传输。为兼容旧客户端，请求仍接受模型字段，但学生对话会固定路由到 `qwen3-vl-flash`。
+返回 SSE 事件：`connected`、`status`、`delta`、`meta`、`done`；错误为 `error`。`connected`、`meta` 和会话历史会记录本次实际使用的回答模型；模型思维链不会传输。
 
 ### `POST /api/attachments`
 
@@ -213,7 +212,7 @@ docker compose up -d qdrant redis
 - `file`：上传文件。
 - `knowledge_base`：默认 `default`。
 - `rebuild`：默认 `true`。
-- `model_provider`、`model`、`api_key`、`base_url`：本次多模态建库使用的模型配置；网页会自动提交当前选择。
+- `model_provider`、`model`、`api_key`、`base_url`：保留用于兼容现有客户端；建库视觉处理固定使用 `qwen3-vl-flash`，只有请求本身为 Qwen 且提供了浏览器 API Key 时才复用该 Qwen 凭据，否则使用后端 Qwen 配置。
 
 ### 其他
 

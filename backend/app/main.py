@@ -28,11 +28,12 @@ from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
 from backend.app.services.mistake_book import MistakeBook
 from backend.app.services.model_catalog import (
-    QWEN_CHAT_MODEL,
     QWEN_MODELS,
     QWEN_MODEL_OPTIONS,
+    QWEN_VL_FALLBACK_MODEL,
     canonical_model_id,
     chat_model_unavailable_reason,
+    choose_default_model,
 )
 
 
@@ -180,21 +181,34 @@ async def knowledge_base_source(knowledge_base: str, source: str) -> FileRespons
     )
 
 
-@app.post("/api/kb/rebuild")
-async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[str, Any]:
-    api_key = payload.api_key
-    base_url = payload.base_url
-    if payload.model_provider == "deepseek":
-        api_key = api_key or settings.deepseek_api_key
-        base_url = (base_url or settings.deepseek_base_url) if payload.api_key else settings.deepseek_base_url
-    elif payload.model_provider == "qwen":
-        api_key = api_key or settings.qwen_api_key
-        base_url = (base_url or settings.qwen_base_url) if payload.api_key else settings.qwen_base_url
-    config = BuildModelConfig(
-        provider=payload.model_provider,
-        model=canonical_model_id(payload.model_provider, payload.model),
+def knowledge_build_model_config(
+    requested_provider: str,
+    requested_api_key: str,
+    requested_base_url: str,
+) -> BuildModelConfig:
+    """Keep knowledge-base specialist models separate from the chat selection."""
+
+    use_browser_qwen_config = requested_provider == "qwen" and bool(requested_api_key.strip())
+    if use_browser_qwen_config:
+        api_key = requested_api_key.strip()
+        base_url = requested_base_url.strip() or settings.qwen_base_url
+    else:
+        api_key = settings.qwen_api_key
+        base_url = settings.qwen_base_url
+    return BuildModelConfig(
+        provider="qwen",
+        model=QWEN_VL_FALLBACK_MODEL,
         api_key=api_key,
         base_url=base_url,
+    )
+
+
+@app.post("/api/kb/rebuild")
+async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[str, Any]:
+    config = knowledge_build_model_config(
+        payload.model_provider,
+        payload.api_key,
+        payload.base_url,
     )
     try:
         build_state = knowledge_bases.start_build(
@@ -281,8 +295,16 @@ async def available_models() -> dict[str, Any]:
     local_models = model_health.get("models", [])
     if settings.ollama_model not in local_models:
         local_models = [settings.ollama_model, *local_models]
+    default_provider, default_model = choose_default_model(
+        model_health,
+        ollama_model=settings.ollama_model,
+        qwen_model=settings.qwen_vision_model,
+        deepseek_model=settings.deepseek_model,
+        qwen_configured=bool(settings.qwen_api_key),
+        deepseek_configured=bool(settings.deepseek_api_key),
+    )
     return {
-        "default": {"provider": "qwen", "model": QWEN_CHAT_MODEL},
+        "default": {"provider": default_provider, "model": default_model},
         "ollama_available": bool(model_health.get("ok")),
         "providers": [
             {
@@ -312,7 +334,7 @@ async def available_models() -> dict[str, Any]:
                 "description": "阿里云百炼文本与多模态 OpenAI 兼容接口",
                 "models": list(dict.fromkeys([*QWEN_MODELS, settings.qwen_vision_model])),
                 "model_options": QWEN_MODEL_OPTIONS,
-                "default_model": QWEN_CHAT_MODEL,
+                "default_model": settings.qwen_vision_model,
                 "base_url": settings.qwen_base_url,
                 "requires_api_key": True,
                 "configured": bool(settings.qwen_api_key),
@@ -438,33 +460,25 @@ def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
     )
 
 
-def select_chat_model_client(payload: ChatRequest) -> tuple[Any, bool]:
-    """Use Qwen3-VL-Flash for student answers and attachment understanding."""
-
-    qwen_payload = payload.model_copy(
-        update={
-            "model_provider": "qwen",
-            "model": QWEN_CHAT_MODEL,
-            "api_key": payload.api_key if payload.model_provider == "qwen" else "",
-            "base_url": payload.base_url if payload.model_provider == "qwen" else "",
-        }
-    )
-    return select_model_client(qwen_payload)
-
-
 @app.post("/api/chat")
 async def chat(payload: ChatRequest) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         selected_client: Any | None = None
         close_selected_client = False
         try:
-            selected_client, close_selected_client = select_chat_model_client(payload)
+            selected_client, close_selected_client = select_model_client(payload)
+            selected_provider = payload.model_provider
+            selected_model = getattr(
+                selected_client,
+                "model",
+                canonical_model_id(payload.model_provider, payload.model),
+            )
             yield sse(
                 "connected",
                 {
                     "session_id": payload.session_id,
-                    "provider": "qwen",
-                    "model": QWEN_CHAT_MODEL,
+                    "provider": selected_provider,
+                    "model": selected_model,
                     "knowledge_base": payload.knowledge_base,
                 },
             )
@@ -526,8 +540,8 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 {
                     "intent": result.intent,
                     "agent": result.agent,
-                    "provider": "qwen",
-                    "model": QWEN_CHAT_MODEL,
+                    "provider": selected_provider,
+                    "model": selected_model,
                     "sources": persisted_sources,
                     "verification": result.verification,
                 },
@@ -542,8 +556,8 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                 result.content,
                 {
                     "agent": result.agent,
-                    "provider": "qwen",
-                    "model": QWEN_CHAT_MODEL,
+                    "provider": selected_provider,
+                    "model": selected_model,
                     "knowledge_base": payload.knowledge_base,
                     "sources": persisted_sources,
                 },
@@ -654,18 +668,10 @@ async def upload(
     indexable = suffix in {".pdf", ".md", ".txt", ".docx"}
     build_state: dict[str, Any] | None = None
     if rebuild and indexable:
-        provided_api_key = bool(api_key.strip())
-        if model_provider == "deepseek":
-            api_key = api_key or settings.deepseek_api_key
-            base_url = (base_url or settings.deepseek_base_url) if provided_api_key else settings.deepseek_base_url
-        elif model_provider == "qwen":
-            api_key = api_key or settings.qwen_api_key
-            base_url = (base_url or settings.qwen_base_url) if provided_api_key else settings.qwen_base_url
-        build_model = BuildModelConfig(
-            provider=model_provider,
-            model=canonical_model_id(model_provider, model),
-            api_key=api_key.strip(),
-            base_url=base_url.strip(),
+        build_model = knowledge_build_model_config(
+            model_provider,
+            api_key,
+            base_url,
         )
         try:
             build_state = knowledge_bases.start_build(
@@ -683,7 +689,7 @@ async def upload(
         "knowledge_base": knowledge_base,
         "indexing": bool(rebuild and indexable),
         "build": build_state,
-        "multimodal_model": f"{model_provider}/{model}" if model else "未配置，使用安全降级",
+        "multimodal_model": f"qwen/{QWEN_VL_FALLBACK_MODEL}",
         "message": "文件已保存，知识库正在后台更新" if rebuild and indexable else "文件已保存",
     }
 
