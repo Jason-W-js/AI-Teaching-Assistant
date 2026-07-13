@@ -7,6 +7,7 @@ import re
 import threading
 import unicodedata
 from collections import Counter
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
@@ -18,10 +19,16 @@ from openpyxl import load_workbook
 from backend.app.config import settings
 from backend.app.rag.models import PageDocument, TextChunk
 from backend.app.rag.embedding_runtime import encode_texts
-from backend.app.rag.ontology import COURSE_CONCEPTS, extract_course_concepts
+from backend.app.rag.ontology import (
+    COURSE_CONCEPTS,
+    extract_course_concepts,
+    is_course_concept,
+    normalize_concept_name,
+)
 from backend.app.rag.multimodal import (
     BuildModelConfig,
     LayoutElement,
+    SCANNED_PAGE_PLACEHOLDER,
     build_local_knowledge_graph,
     enhance_pdf,
     multimodal_chunks,
@@ -157,7 +164,7 @@ def extract_pdf(path: Path, chapter_limit: int | None = None) -> list[PageDocume
         if len(text) < 30 and not has_visual_content and not has_formula_content:
             continue
         if not text:
-            text = "[本页主要包含电路图、公式或其他图形内容]"
+            text = SCANNED_PAGE_PLACEHOLDER
         page_docs.append(
             PageDocument(
                 text=text,
@@ -326,8 +333,23 @@ def extract_question_json(path: Path) -> list[dict[str, Any]]:
     return questions
 
 
-def _knowledge_tags(text: str, section: str) -> list[str]:
-    return extract_course_concepts(text, section)[:8]
+def _knowledge_tags(
+    text: str,
+    section: str,
+    supplemental: Iterable[str] = (),
+) -> list[str]:
+    tags = extract_course_concepts(text, section)
+    compact_text = re.sub(r"\s+", "", text).lower()
+    for value in supplemental:
+        concept = normalize_concept_name(str(value))
+        if (
+            concept
+            and is_course_concept(concept)
+            and re.sub(r"\s+", "", concept).lower() in compact_text
+            and concept not in tags
+        ):
+            tags.append(concept)
+    return tags[:12]
 
 
 def _sentence_pieces(text: str, max_chars: int = 900) -> list[str]:
@@ -359,6 +381,12 @@ def chunk_documents(documents: Iterable[PageDocument], max_chars: int = 900) -> 
     chunks: list[TextChunk] = []
     for document in documents:
         pieces = _sentence_pieces(document.text, max_chars=max_chars)
+        supplemental_concepts = (
+            document.extra.get("ocr_concepts", [])
+            if isinstance(document.extra, dict)
+            and isinstance(document.extra.get("ocr_concepts"), list)
+            else []
+        )
         current: list[str] = []
         current_length = 0
 
@@ -379,7 +407,9 @@ def chunk_documents(documents: Iterable[PageDocument], max_chars: int = 900) -> 
                     page_start=document.source_page or document.page,
                     page_end=document.source_page or document.page,
                     doc_type=document.doc_type,
-                    knowledge_tags=_knowledge_tags(text, document.section),
+                    knowledge_tags=_knowledge_tags(
+                        text, document.section, supplemental_concepts
+                    ),
                     element_type=document.element_type,
                     bbox=document.bbox,
                     parent_id=document.parent_id,
@@ -450,6 +480,44 @@ def _write_clean_markdown(path: Path, documents: list[PageDocument], output_dir:
     (output_dir / f"{path.stem}.clean.md").write_text("\n".join(lines), encoding="utf-8")
 
 
+def validate_extracted_content(chunks: list[TextChunk]) -> dict[str, int]:
+    text_chunks = [
+        chunk for chunk in chunks
+        if chunk.doc_type == "textbook" and chunk.element_type == "text"
+    ]
+    placeholders = [
+        chunk for chunk in text_chunks
+        if chunk.text.strip() == SCANNED_PAGE_PLACEHOLDER
+    ]
+    if placeholders and len(placeholders) >= max(3, (len(text_chunks) + 3) // 4):
+        raise RuntimeError(
+            "扫描版 PDF 的正文 OCR 未成功："
+            f"{len(placeholders)}/{len(text_chunks)} 个正文片段仍是图形占位符。"
+            "请配置可用的 Qwen3-VL API 后重建，旧索引不会被替换。"
+        )
+    return {
+        "text_chunks": len(text_chunks),
+        "placeholder_text_chunks": len(placeholders),
+    }
+
+
+def validate_graph_semantics(
+    chunks: list[TextChunk], graph: dict[str, Any]
+) -> dict[str, int]:
+    textbook_chunks = [chunk for chunk in chunks if chunk.doc_type == "textbook"]
+    concepts = {
+        str(node.get("name", "")).strip()
+        for node in graph.get("nodes", [])
+        if node.get("type") == "concept" and str(node.get("name", "")).strip()
+    }
+    if len(textbook_chunks) >= 12 and len(concepts) <= 1:
+        raise RuntimeError(
+            "知识图谱语义校验失败：教材内容较多，但只识别出"
+            f" {len(concepts)} 个知识点。请检查 OCR/章节识别结果，旧索引不会被替换。"
+        )
+    return {"concept_nodes": len(concepts)}
+
+
 def validate_build_artifacts(
     chunks: list[TextChunk],
     embeddings: np.ndarray,
@@ -484,6 +552,14 @@ def validate_build_artifacts(
         "graph_edges": len(graph.get("edges", [])),
         "question_chunks": 0,
         "dangling_graph_edges": 0,
+        "concept_nodes": sum(
+            node.get("type") == "concept" for node in graph.get("nodes", [])
+        ),
+        "placeholder_text_chunks": sum(
+            chunk.text.strip() == SCANNED_PAGE_PLACEHOLDER
+            for chunk in chunks
+            if chunk.doc_type == "textbook" and chunk.element_type == "text"
+        ),
     }
 
 
@@ -582,6 +658,14 @@ def build_knowledge_base(
                 output_dir,
                 model_config=model_config,
             )
+            repeated_noise = _edge_noise([item.text for item in extracted])
+            extracted = [
+                replace(
+                    item,
+                    text=clean_page_text(item.text, repeated_noise) or item.text,
+                )
+                for item in extracted
+            ]
             documents.extend(extracted)
             elements.extend(pdf_elements)
             cleaning_audits.extend(
@@ -615,6 +699,7 @@ def build_knowledge_base(
     chunks = chunk_documents(documents) + multimodal_chunks(elements)
     if not chunks:
         raise RuntimeError(f"在 {resources_dir} 中没有提取到可索引内容")
+    extraction_quality = validate_extracted_content(chunks)
 
     chunk_path = output_dir / "chunks.jsonl"
     chunk_path.write_text(
@@ -631,6 +716,7 @@ def build_knowledge_base(
 
     report(60, "knowledge_graph", "正在构建知识图谱关系")
     graph = build_local_knowledge_graph(chunks)
+    semantic_quality = validate_graph_semantics(chunks, graph)
     (output_dir / "knowledge_graph.json").write_text(
         json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8"
     )
@@ -677,12 +763,16 @@ def build_knowledge_base(
     formula_processing = _formula_pipeline_stats(output_dir, elements)
     metadata = {
         "state": "populated",
-        "schema_version": "2.1-layered-multimodal",
+        "schema_version": "2.2-layered-multimodal-ocr",
         "resource_dir": str(resources_dir),
         "embedding_model": str(embedding_model_path),
         "dimension": int(embeddings.shape[1]),
         "documents": len(source_files),
         "text_pages": len(documents),
+        "ocr_pages": sum(
+            isinstance(item.extra, dict) and bool(item.extra.get("ocr_processor"))
+            for item in documents
+        ),
         "questions": 0,
         "excluded_sources": excluded_sources,
         "chunks": len(chunks),
@@ -707,6 +797,7 @@ def build_knowledge_base(
         "chapter_limit": chapter_limit,
         "sources": [path.name for path in source_files],
         "validation": validation,
+        "extraction_quality": {**extraction_quality, **semantic_quality},
     }
     metadata["pipeline_layers"] = {
         "document_cleaning": {
@@ -720,7 +811,9 @@ def build_knowledge_base(
         },
         "document_parsing": {
             "status": "ready",
-            "engine": "PDF-Extract-Kit + PyMuPDF fallback",
+            "engine": "PyMuPDF text + Qwen3-VL scanned-page OCR + PDF-Extract-Kit layout",
+            "ocr_pages": metadata["ocr_pages"],
+            "placeholder_text_chunks": extraction_quality["placeholder_text_chunks"],
             "layout_elements": len(elements),
             "preserves_page_bbox": True,
         },

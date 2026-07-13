@@ -2,6 +2,7 @@ import json
 
 import fitz
 import numpy as np
+import pytest
 
 from backend.app.rag.models import PageDocument
 from backend.app.rag.pipeline import (
@@ -9,6 +10,7 @@ from backend.app.rag.pipeline import (
     chunk_documents,
     clean_page_text,
     extract_pdf,
+    validate_extracted_content,
 )
 
 
@@ -36,6 +38,37 @@ def test_chunks_keep_metadata():
     assert all(chunk.page_start == 29 for chunk in chunks)
     assert all(chunk.chapter.startswith("第一章") for chunk in chunks)
     assert any("PN结" in chunk.knowledge_tags for chunk in chunks)
+
+
+def test_ocr_concepts_are_kept_as_chunk_tags():
+    docs = [PageDocument(
+        text="PN结形成空间电荷区，并产生内建电场。",
+        source="扫描教材.pdf",
+        page=5,
+        chapter="第一章 常用半导体器件",
+        section="1.1.3 PN结",
+        extra={"ocr_concepts": ["PN结", "空间电荷区", "内建电场"]},
+    )]
+
+    chunks = chunk_documents(docs)
+
+    assert {"PN结", "空间电荷区", "内建电场"}.issubset(chunks[0].knowledge_tags)
+
+
+def test_placeholder_heavy_scanned_pdf_fails_content_validation():
+    docs = [
+        PageDocument(
+            text="[本页主要包含电路图、公式或其他图形内容]",
+            source="扫描教材.pdf",
+            page=page,
+            chapter="扫描教材",
+            section="扫描教材",
+        )
+        for page in range(1, 9)
+    ]
+
+    with pytest.raises(RuntimeError, match="正文 OCR 未成功"):
+        validate_extracted_content(chunk_documents(docs))
 
 
 def test_pdf_subset_filename_preserves_original_source_pages(tmp_path):

@@ -20,6 +20,7 @@ from backend.app.rag.multimodal import (
     _indexable_pdfkit_regions,
     _normalize_circuit_result,
     _normalize_formula_result,
+    _ocr_scanned_pages,
     _safe_partial_noise_fragment,
     build_local_knowledge_graph,
     enhance_pdf,
@@ -66,6 +67,53 @@ def test_pdf_fallback_preserves_layout_and_image_metadata(tmp_path, monkeypatch)
     assert (tmp_path / "index" / image.image_path).exists()
     assert image.page == 1
     assert image.content_hash
+
+
+def test_scanned_page_ocr_recovers_text_hierarchy_concepts_and_cache(tmp_path):
+    pdf_path = tmp_path / "scanned.pdf"
+    pdf = fitz.open()
+    page = pdf.new_page(width=500, height=700)
+    page.insert_image(page.rect, stream=_diagram_png())
+    pdf.save(pdf_path)
+    pdf.close()
+
+    docs = [PageDocument(
+        "[本页主要包含电路图、公式或其他图形内容]",
+        pdf_path.name,
+        1,
+        pdf_path.stem,
+        pdf_path.stem,
+    )]
+
+    class FakeVisionClient:
+        model = "qwen3-vl-flash"
+        calls = 0
+
+        def complete_json(self, *_args, **_kwargs):
+            self.calls += 1
+            return {
+                "text": [
+                    "第一章 常用半导体器件",
+                    "1.1 半导体基础知识",
+                    "1.1.3 PN结",
+                    "PN结形成空间电荷区，并产生内建电场。",
+                ],
+                "chapter": "第一章 常用半导体器件",
+                "section": "1.1 半导体基础知识",
+                "concepts": ["PN结", "空间电荷区", "内建电场", "教材"],
+            }
+
+    client = FakeVisionClient()
+    first = _ocr_scanned_pages(pdf_path, docs, tmp_path, client, "doc-hash")
+    assert client.calls == 1
+    assert first[0].chapter == "第一章 常用半导体器件"
+    assert first[0].section == "1.1.3 PN结"
+    assert first[0].extra["ocr_concepts"] == ["PN结", "空间电荷区", "内建电场"]
+    assert "PN结形成空间电荷区" in first[0].text
+
+    cached = _ocr_scanned_pages(pdf_path, docs, tmp_path, None, "doc-hash")
+    assert cached[0].text == first[0].text
+    assert cached[0].section == "1.1.3 PN结"
 
 
 def test_multimodal_chunk_and_graph_keep_circuit_relationships():

@@ -37,6 +37,18 @@ PARTIAL_NOISE_MARKERS = (
     "扫码", "公众号", "购买正版", "资源下载", "广告", "网址", "http://", "https://",
 )
 
+SCANNED_PAGE_PLACEHOLDER = "[本页主要包含电路图、公式或其他图形内容]"
+PAGE_OCR_SCHEMA_VERSION = "1.0-qwen-page-ocr"
+PAGE_OCR_PROMPT = """你是模拟电子技术教材的高保真 OCR 与结构识别器。请完整转写本页，严格保持阅读顺序、标题层级、图题、表题、公式、变量、上下标和单位；不得概括、改写或补写看不清的内容。省略页码和重复的页眉。
+text 必须是按阅读顺序排列的字符串数组，每个元素是一行或一个自然段；chapter 填本页可见的章标题，否则为空；section 填本页最后出现、层级最深的编号教学小节（例如“1.1.3 PN结”），否则为空；concepts 只列正文中明确出现的 2-18 个具体模拟电子技术知识点，不得列书名、章名、泛化词或举例材料。
+仅返回 JSON：{"text":["..."],"chapter":"","section":"","concepts":["..."]}。"""
+
+OCR_NON_CONCEPTS = {
+    "模拟电子技术", "模拟电子技术基础", "常用半导体器件", "基本放大电路",
+    "本章讨论的问题", "本章小结", "问题", "公式", "图形", "图示", "教材",
+    "材料", "物质", "元件", "器件", "电路", "电流", "电压", "电子",
+}
+
 
 def _safe_partial_noise_fragment(fragment: str) -> bool:
     lowered = fragment.lower()
@@ -244,6 +256,200 @@ def _file_sha256(path: Path) -> str:
         while block := handle.read(1024 * 1024):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _ocr_text(value: Any) -> str:
+    if isinstance(value, list):
+        lines = [str(item).strip() for item in value if str(item).strip()]
+        return "\n".join(lines)
+    return str(value or "").strip()
+
+
+def _ocr_heading_context(
+    value: dict[str, Any],
+    text: str,
+    previous_chapter: str,
+    previous_section: str,
+) -> tuple[str, str]:
+    lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines() if line.strip()]
+    chapter_pattern = re.compile(r"^第[一二三四五六七八九十百0-9]+章\s*[^。；]{0,40}")
+    visible_chapters = [match.group(0).strip() for line in lines if (match := chapter_pattern.match(line))]
+    raw_chapter = re.sub(r"\s+", " ", str(value.get("chapter", ""))).strip()
+    chapter = visible_chapters[-1] if visible_chapters else (
+        raw_chapter if chapter_pattern.match(raw_chapter) else previous_chapter
+    )
+    if chapter and chapter != previous_chapter:
+        previous_section = ""
+
+    section_pattern = re.compile(
+        r"^\s*(\d{1,2}(?:\s*[.．]\s*\d{1,2}){1,3})\s+([^=。；]{2,42})\s*$"
+    )
+    visible_sections: list[str] = []
+    for line in lines:
+        match = section_pattern.match(line)
+        if not match:
+            continue
+        number = re.sub(r"\s*[.．]\s*", ".", match.group(1))
+        title = match.group(2).strip(" .．、:：-")
+        visible_sections.append(f"{number} {title}")
+    raw_section = re.sub(r"\s+", " ", str(value.get("section", ""))).strip()
+    if visible_sections:
+        section = visible_sections[-1]
+    elif section_pattern.match(raw_section):
+        match = section_pattern.match(raw_section)
+        assert match is not None
+        number = re.sub(r"\s*[.．]\s*", ".", match.group(1))
+        section = f"{number} {match.group(2).strip(' .．、:：-')}"
+    else:
+        section = previous_section
+    return chapter, section
+
+
+def _ocr_concepts(value: Any, text: str) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    compact_text = re.sub(r"\s+", "", text).lower()
+    concepts: list[str] = []
+    for item in value:
+        concept = normalize_concept_name(str(item))
+        compact = re.sub(r"\s+", "", concept).lower()
+        if (
+            not (2 <= len(concept) <= 24)
+            or concept in OCR_NON_CONCEPTS
+            or not re.search(r"[\u4e00-\u9fffA-Za-z]", concept)
+            or compact not in compact_text
+        ):
+            continue
+        if concept not in concepts:
+            concepts.append(concept)
+    return concepts[:18]
+
+
+def _write_page_ocr_cache(path: Path, entries: dict[int, dict[str, Any]]) -> None:
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        "\n".join(
+            json.dumps(entries[page], ensure_ascii=False)
+            for page in sorted(entries)
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
+
+
+def _ocr_scanned_pages(
+    path: Path,
+    pages: list[PageDocument],
+    output_dir: Path,
+    client: QwenVisionClient | None,
+    document_hash: str,
+) -> list[PageDocument]:
+    """Recover the text layer of image-only textbook pages with a durable cache."""
+
+    if not any(page.text.strip() == SCANNED_PAGE_PLACEHOLDER for page in pages):
+        return pages
+    cache_path = output_dir / f"{path.stem}.page_ocr.jsonl"
+    cache_entries: dict[int, dict[str, Any]] = {}
+    if cache_path.exists():
+        try:
+            for line in cache_path.read_text(encoding="utf-8").splitlines():
+                item = json.loads(line)
+                if (
+                    isinstance(item, dict)
+                    and item.get("schema_version") == PAGE_OCR_SCHEMA_VERSION
+                    and item.get("document_hash") == document_hash
+                    and (client is None or item.get("model") == client.model)
+                    and str(item.get("text", "")).strip()
+                ):
+                    cache_entries[int(item["page"])] = item
+        except (OSError, ValueError, json.JSONDecodeError):
+            cache_entries = {}
+
+    recovered: list[PageDocument] = []
+    previous_chapter = ""
+    previous_section = ""
+    document = fitz.open(path)
+    try:
+        for page_document in sorted(pages, key=lambda item: item.page):
+            if page_document.text.strip() != SCANNED_PAGE_PLACEHOLDER:
+                previous_chapter = page_document.chapter or previous_chapter
+                previous_section = page_document.section or previous_section
+                recovered.append(page_document)
+                continue
+
+            cached = cache_entries.get(page_document.page)
+            if cached:
+                chapter = str(cached.get("chapter", "")).strip() or previous_chapter
+                section = str(cached.get("section", "")).strip() or previous_section
+                concepts = [str(item) for item in cached.get("concepts", []) if str(item).strip()]
+                previous_chapter, previous_section = chapter, section
+                recovered.append(replace(
+                    page_document,
+                    text=str(cached["text"]).strip(),
+                    chapter=chapter or page_document.chapter,
+                    section=section or chapter or page_document.section,
+                    extra={
+                        **(page_document.extra or {}),
+                        "ocr_concepts": concepts,
+                        "ocr_processor": f"qwen-vl:{cached.get('model', '')}",
+                    },
+                ))
+                continue
+            if client is None:
+                recovered.append(page_document)
+                continue
+
+            page = document[page_document.page - 1]
+            width, height = max(1.0, float(page.rect.width)), max(1.0, float(page.rect.height))
+            scale = min(1.7, 2200 / max(width, height), math.sqrt(4_500_000 / (width * height)))
+            pixmap = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False)
+            image_bytes = pixmap.tobytes("png")
+            try:
+                value = client.complete_json(
+                    PAGE_OCR_PROMPT,
+                    image_bytes=image_bytes,
+                    image_mime="image/png",
+                )
+            except QwenMultimodalAPIError as exc:
+                logger.warning("Qwen page OCR failed for %s page %s: %s", path.name, page_document.page, exc)
+                recovered.append(page_document)
+                continue
+            text = _ocr_text(value.get("text"))
+            if len(re.sub(r"\s+", "", text)) < 30:
+                logger.warning("Qwen page OCR returned too little text for %s page %s", path.name, page_document.page)
+                recovered.append(page_document)
+                continue
+            chapter, section = _ocr_heading_context(
+                value, text, previous_chapter, previous_section
+            )
+            concepts = _ocr_concepts(value.get("concepts"), text)
+            previous_chapter, previous_section = chapter, section
+            cache_entries[page_document.page] = {
+                "schema_version": PAGE_OCR_SCHEMA_VERSION,
+                "document_hash": document_hash,
+                "model": client.model,
+                "page": page_document.page,
+                "source_page": page_document.source_page or page_document.page,
+                "text": text,
+                "chapter": chapter,
+                "section": section,
+                "concepts": concepts,
+            }
+            _write_page_ocr_cache(cache_path, cache_entries)
+            recovered.append(replace(
+                page_document,
+                text=text,
+                chapter=chapter or page_document.chapter,
+                section=section or chapter or page_document.section,
+                extra={
+                    **(page_document.extra or {}),
+                    "ocr_concepts": concepts,
+                    "ocr_processor": f"qwen-vl:{client.model}",
+                },
+            ))
+    finally:
+        document.close()
+    return recovered
 
 
 def _looks_like_formula(text: str) -> bool:
@@ -692,6 +898,13 @@ def enhance_pdf(
         else None
     )
     document_hash = _file_sha256(path)
+    page_documents = _ocr_scanned_pages(
+        path, page_documents, output_dir, vision_client, document_hash
+    )
+    page_text_hashes = {
+        item.page: hashlib.sha256(item.text.encode("utf-8")).hexdigest()
+        for item in page_documents
+    }
     audit_path = output_dir / f"{path.stem}.cleaning_audit.json"
     decisions: dict[int, dict[str, Any]] = {}
     if audit_path.exists():
@@ -708,6 +921,7 @@ def enhance_pdf(
                 if isinstance(item, dict)
                 and item.get("method") == expected_method
                 and item.get("document_hash") == document_hash
+                and item.get("page_text_hash") == page_text_hashes.get(int(item["page"]))
             }
         except Exception:
             decisions = {}
@@ -743,6 +957,10 @@ def enhance_pdf(
             decision["reason"] = "检测到课程概念或公式，安全策略强制保留"
     for decision in decisions.values():
         decision["document_hash"] = document_hash
+        try:
+            decision["page_text_hash"] = page_text_hashes.get(int(decision["page"]), "")
+        except (TypeError, ValueError):
+            decision["page_text_hash"] = ""
     kept_docs: list[PageDocument] = []
     for item in page_documents:
         decision = decisions.get(item.page, {})

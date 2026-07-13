@@ -752,7 +752,7 @@ function Conversation({ onAddMistake }: { onAddMistake: (content: string, agent:
 function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loading: boolean }) {
   const [selectedId, setSelectedId] = useState('')
   const [rangeMode, setRangeMode] = useState<'core' | 'extended' | 'all' | 'custom'>('core')
-  const [limits, setLimits] = useState({ concepts: 18, pages: 10, structures: 26 })
+  const [limits, setLimits] = useState({ concepts: 14, pages: 8, structures: 14 })
   const totals = useMemo(() => ({
     concepts: graph?.nodes.filter((node) => node.type === 'concept').length || 0,
     pages: graph?.nodes.filter((node) => node.type === 'page').length || 0,
@@ -760,17 +760,17 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
   }), [graph])
 
   const presetLimits = (mode: 'core' | 'extended' | 'all') => ({
-    concepts: mode === 'all' ? totals.concepts : Math.min(totals.concepts, mode === 'core' ? 18 : 36),
-    pages: mode === 'all' ? totals.pages : Math.min(totals.pages, mode === 'core' ? 10 : 30),
-    structures: mode === 'all' ? totals.structures : Math.min(totals.structures, mode === 'core' ? 26 : 48),
+    concepts: mode === 'all' ? totals.concepts : Math.min(totals.concepts, mode === 'core' ? 14 : 28),
+    pages: mode === 'all' ? totals.pages : Math.min(totals.pages, mode === 'core' ? 8 : 20),
+    structures: mode === 'all' ? totals.structures : Math.min(totals.structures, mode === 'core' ? 14 : 28),
   })
 
   useEffect(() => {
     setRangeMode('core')
     setLimits({
-      concepts: Math.min(totals.concepts, 18),
-      pages: Math.min(totals.pages, 10),
-      structures: Math.min(totals.structures, 26),
+      concepts: Math.min(totals.concepts, 14),
+      pages: Math.min(totals.pages, 8),
+      structures: Math.min(totals.structures, 14),
     })
     setSelectedId('')
   }, [graph?.knowledge_base])
@@ -794,23 +794,34 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
       degree.set(edge.target, (degree.get(edge.target) || 0) + 1)
     })
     const documents = graph.nodes.filter((node) => node.type === 'document').slice(0, 3)
-    const pages = graph.nodes
-      .filter((node) => node.type === 'page')
-      .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
-      .slice(0, limits.pages)
     const concepts = graph.nodes
       .filter((node) => node.type === 'concept')
-      .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
+      .sort((a, b) => (b.evidence_count || degree.get(b.id) || 0) - (a.evidence_count || degree.get(a.id) || 0))
       .slice(0, limits.concepts)
+    const selectedConcepts = new Set(concepts.map((node) => node.id))
+    const selectedCoverage = new Map<string, number>()
+    graph.edges.forEach((edge) => {
+      if (edge.type === 'COVERS' && selectedConcepts.has(edge.target)) {
+        selectedCoverage.set(edge.source, (selectedCoverage.get(edge.source) || 0) + (edge.evidence_count || 1))
+      }
+    })
+    const pages = graph.nodes
+      .filter((node) => node.type === 'page')
+      .sort((a, b) => (
+        (selectedCoverage.get(b.id) || 0) - (selectedCoverage.get(a.id) || 0)
+        || (degree.get(b.id) || 0) - (degree.get(a.id) || 0)
+        || (a.page || 0) - (b.page || 0)
+      ))
+      .slice(0, limits.pages)
     const structures = graph.nodes
       .filter((node) => node.type === 'circuit' || node.type === 'component')
       .sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0))
       .slice(0, limits.structures)
     const groups = [
       { nodes: documents, radius: 0, ringGap: 34, capacity: 1 },
-      { nodes: pages, radius: 80, ringGap: 35, capacity: 24 },
-      { nodes: concepts, radius: 210, ringGap: 38, capacity: 24 },
-      { nodes: structures, radius: 305, ringGap: 32, capacity: 28 },
+      { nodes: concepts, radius: 125, ringGap: 38, capacity: 18 },
+      { nodes: pages, radius: 260, ringGap: 34, capacity: 24 },
+      { nodes: structures, radius: 345, ringGap: 30, capacity: 28 },
     ]
     const positioned = groups.flatMap((group) => group.nodes.map((node, index) => {
       const ringIndex = Math.floor(index / group.capacity)
@@ -911,7 +922,9 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
                   tabIndex={0}
                 >
                   <circle r={node.type === 'document' ? 25 : node.type === 'page' ? 16 : node.type === 'concept' ? Math.min(22, 12 + node.degree) : node.type === 'circuit' ? 12 : 9} />
-                  <text y={node.type === 'document' ? 40 : node.type === 'page' || node.type === 'concept' ? 32 : 23}>{node.name?.replace(/^电路图\s*[·•]\s*/, '').slice(0, 18) || typeLabel[node.type] || '资料'}</text>
+                  {(node.type !== 'page' || limits.pages <= 12 || selectedId === node.id) && (
+                    <text y={node.type === 'document' ? 40 : node.type === 'page' || node.type === 'concept' ? 32 : 23}>{node.name?.replace(/^电路图\s*[·•]\s*/, '').slice(0, 18) || typeLabel[node.type] || '资料'}</text>
+                  )}
                 </g>
               ))}
             </g>
@@ -919,7 +932,7 @@ function KnowledgeGraphView({ graph, loading }: { graph?: KnowledgeGraph; loadin
           <div className="graph-legend"><span><i className="document" />教材</span><span><i className="page" />页面</span><span><i className="concept" />知识点</span><span><i className="circuit" />电路图</span><span><i className="component" />元件</span></div>
         </div>
         <aside className="graph-detail">
-          {selected ? <><span>{typeLabel[selected.type] || '知识节点'}</span><h2>{selected.name || '未命名节点'}</h2><p>连接 {neighbors} 个语义节点{selected.evidence_count ? `，由 ${selected.evidence_count} 条教材证据支持` : ''}。公式与正文片段不会单独铺在图中，但仍参与检索和答案引用。</p>{selectedPages.length > 0 && <div className="graph-page-list">来源页码：{selectedPages.map((page) => `第 ${page} 页`).join('、')}</div>}</> : <><Network size={28} /><h2>探索知识关系</h2><p>中心是教材与页面，绿色节点是知识点，外围仅保留电路图和去重后的关键元件。</p></>}
+          {selected ? <><span>{typeLabel[selected.type] || '知识节点'}</span><h2>{selected.name || '未命名节点'}</h2><p>连接 {neighbors} 个语义节点{selected.evidence_count ? `，由 ${selected.evidence_count} 条教材证据支持` : ''}。公式与正文片段不会单独铺在图中，但仍参与检索和答案引用。</p>{selectedPages.length > 0 && <div className="graph-page-list">来源页码：{selectedPages.map((page) => `第 ${page} 页`).join('、')}</div>}</> : <><Network size={28} /><h2>探索知识关系</h2><p>教材位于中心，绿色知识点构成语义核心，蓝色页面与外围电路结构作为可追溯证据。</p></>}
         </aside>
       </div>
     </section>
