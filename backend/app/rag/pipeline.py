@@ -3,9 +3,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import unicodedata
+import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -41,6 +43,8 @@ BuildProgressCallback = Callable[[int, str, str], None]
 KNOWLEDGE_EXTENSIONS = {".pdf", ".md", ".txt", ".docx"}
 QUESTION_BANK_EXTENSIONS = {".xlsx", ".json"}
 SUPPORTED_EXTENSIONS = KNOWLEDGE_EXTENSIONS | QUESTION_BANK_EXTENSIONS
+INGESTION_MANIFEST = ".ingestion_manifest.json"
+EXTRACTION_CACHE_VERSION = "2"
 AD_NOISE = (
     "扫码关注",
     "微信公众号",
@@ -50,6 +54,11 @@ AD_NOISE = (
     "广告",
 )
 TAG_KEYWORDS = COURSE_CONCEPTS
+DOCUMENT_TYPE_TOKENS = {
+    "exam": ("试卷", "考试", "期末", "期中", "月考", "真题", "模拟卷", "测试卷", "练习卷"),
+    "question_bank": ("题库", "习题集", "练习题", "习题答案"),
+    "textbook": ("教材", "教程", "讲义", "教科书", "课程", "基础", "原理"),
+}
 
 
 def _normalize_line(line: str) -> str:
@@ -116,6 +125,42 @@ def clean_page_text(text: str, repeated_noise: set[str] | None = None) -> str:
 
 def _is_chapter_title(title: str) -> bool:
     return bool(re.match(r"^第[一二三四五六七八九十百0-9]+章", title.replace(" ", "")))
+
+
+def _infer_ocr_hierarchy(
+    text: str, fallback: str, chapter: str, section: str
+) -> tuple[str, str]:
+    """Recover printed chapter/section headings when a scan has no outline."""
+    lines = [_normalize_line(line) for line in text.splitlines()[:16]]
+    lines = [line for line in lines if 3 <= len(line) <= 90]
+    current_chapter = chapter or fallback
+    current_section = section or current_chapter
+    for line in lines:
+        compact = line.replace(" ", "")
+        looks_like_sentence = bool(
+            re.match(
+                r"^第[一二三四五六七八九十百0-9]+章(?:中|已|我们|介绍|将|讨论)",
+                compact,
+            )
+        )
+        if _is_chapter_title(compact) and not looks_like_sentence and len(compact) <= 36:
+            current_chapter = line
+            current_section = line
+            continue
+        section_match = re.match(r"^(\d+)(?:\.\d+){1,3}\s*[^\d\W].+", line)
+        if section_match or re.match(r"^[一二三四五六七八九十]+[、.]\s*.+", line):
+            current_section = line
+            if section_match:
+                major = int(section_match.group(1))
+                numerals = "零一二三四五六七八九十"
+                inferred_prefix = (
+                    f"第{numerals[major]}章"
+                    if 0 < major < len(numerals)
+                    else f"第{major}章"
+                )
+                if not current_chapter.startswith(inferred_prefix):
+                    current_chapter = inferred_prefix
+    return current_chapter, current_section
 
 
 def extract_pdf(path: Path, chapter_limit: int | None = None) -> list[PageDocument]:
@@ -323,6 +368,159 @@ def extract_question_json(path: Path) -> list[dict[str, Any]]:
         normalized.setdefault("solution_steps", "")
         normalized["source"] = path.name
         questions.append(normalized)
+    return questions
+
+
+def _load_ingestion_manifest(resources_dir: Path) -> dict[str, str]:
+    path = resources_dir / INGESTION_MANIFEST
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    files = value.get("files", value) if isinstance(value, dict) else {}
+    result: dict[str, str] = {}
+    for name, metadata in files.items():
+        document_type = (
+            metadata.get("document_type", metadata)
+            if isinstance(metadata, dict)
+            else metadata
+        )
+        document_type = str(document_type)
+        if document_type in {"auto", "textbook", "exam", "question_bank", "notes"}:
+            result[str(name)] = document_type
+    return result
+
+
+def list_source_files(resources_dir: Path) -> list[Path]:
+    """Return user content only; internal dotfiles never become course sources."""
+    return [
+        path
+        for path in sorted(resources_dir.iterdir())
+        if path.is_file()
+        and not path.name.startswith(".")
+        and path.name != INGESTION_MANIFEST
+        and path.suffix.lower() in SUPPORTED_EXTENSIONS
+    ]
+
+
+def _pdf_cache_path(
+    cache_dir: Path,
+    path: Path,
+    chapter_limit: int | None,
+    extractor_url: str = "",
+) -> Path:
+    stat = path.stat()
+    signature = "|".join(
+        (
+            EXTRACTION_CACHE_VERSION,
+            str(path.resolve()),
+            str(stat.st_size),
+            str(stat.st_mtime_ns),
+            str(chapter_limit),
+            extractor_url,
+            os.getenv("PDF_LOCAL_OCR", "auto"),
+        )
+    )
+    return cache_dir / f"{hashlib.sha1(signature.encode('utf-8')).hexdigest()}.json"
+
+
+def _load_cached_pdf(
+    cache_path: Path,
+) -> tuple[list[PageDocument], str, list[str]] | None:
+    try:
+        payload = json.loads(cache_path.read_text(encoding="utf-8"))
+        if payload.get("schema_version") != EXTRACTION_CACHE_VERSION:
+            return None
+        documents = [PageDocument(**item) for item in payload.get("documents", [])]
+        if not documents:
+            return None
+        return documents, str(payload.get("parser", "cache")), list(payload.get("warnings", []))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def _write_cached_pdf(
+    cache_path: Path,
+    documents: list[PageDocument],
+    parser: str,
+    warnings: list[str],
+) -> None:
+    if not documents:
+        return
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = cache_path.with_name(f".{cache_path.name}.{uuid.uuid4().hex[:8]}.tmp")
+    temporary.write_text(
+        json.dumps(
+            {
+                "schema_version": EXTRACTION_CACHE_VERSION,
+                "parser": parser,
+                "warnings": warnings,
+                "documents": [document.__dict__ for document in documents],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    temporary.replace(cache_path)
+
+
+def classify_document(
+    path: Path, documents: list[PageDocument], declared: str = "auto"
+) -> str:
+    if declared != "auto":
+        return declared
+    if path.suffix.lower() in QUESTION_BANK_EXTENSIONS:
+        return "question_bank"
+    filename = path.stem.lower().replace(" ", "")
+    for document_type in ("exam", "question_bank", "textbook"):
+        if any(token in filename for token in DOCUMENT_TYPE_TOKENS[document_type]):
+            return document_type
+    sample = "\n".join(document.text for document in documents[:12])
+    numbered = len(
+        re.findall(r"(?:^|\n)\s*(?:\d{1,3}[.、．)]|[一二三四五六七八九十]+[、.])\s*", sample)
+    )
+    question_words = len(
+        re.findall(r"(?:选择题|填空题|计算题|简答题|证明题|本题\s*\d+\s*分)", sample)
+    )
+    return "exam" if numbered >= 8 and question_words >= 1 else "textbook"
+
+
+def extract_questions_from_documents(
+    documents: list[PageDocument], source: str
+) -> list[dict[str, Any]]:
+    """Extract reviewable question candidates while preserving page anchors."""
+    questions: list[dict[str, Any]] = []
+    marker = re.compile(
+        r"(?m)^(?:\s*)(?P<label>(?:第\s*)?\d{1,3}\s*[.、．）)]|[一二三四五六七八九十]+[、.])\s*"
+    )
+    for document in documents:
+        matches = list(marker.finditer(document.text))
+        for index, match in enumerate(matches):
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(document.text)
+            stem = document.text[match.start() : end].strip()
+            stem = re.split(r"\n\n(?:参考答案|答案|解析)[:：]?", stem, maxsplit=1)[0].strip()
+            if not 12 <= len(stem) <= 5000:
+                continue
+            digest = hashlib.sha1(
+                f"{source}|{document.page}|{stem[:240]}".encode("utf-8")
+            ).hexdigest()[:12]
+            questions.append(
+                {
+                    "question_id": f"AUTO-{digest}",
+                    "question_text": stem,
+                    "knowledge_tags": extract_course_concepts(stem, document.section)[:8],
+                    "standard_answer": "",
+                    "common_mistakes": "",
+                    "difficulty": "待标注",
+                    "question_type": "自动抽取题",
+                    "solution_steps": "",
+                    "source": source,
+                    "source_page": document.source_page or document.page,
+                    "extraction": "rule_candidate",
+                }
+            )
     return questions
 
 
@@ -550,18 +748,18 @@ def build_knowledge_base(
 
     documents: list[PageDocument] = []
     elements: list[LayoutElement] = []
+    questions: list[dict[str, Any]] = []
     cleaning_audits: list[dict[str, Any]] = []
-    candidate_files = [
-        path for path in sorted(resources_dir.iterdir())
-        if path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
-    ]
+    source_manifest: list[dict[str, Any]] = []
+    declared_types = _load_ingestion_manifest(resources_dir)
+    candidate_files = list_source_files(resources_dir)
     source_files = [
         path for path in candidate_files if path.suffix.lower() in KNOWLEDGE_EXTENSIONS
     ]
     excluded_sources = [
         {
             "source": path.name,
-            "reason": "题库文件与课程知识库隔离，不参与分块、向量、图谱或检索",
+            "reason": "题库与课程正文向量隔离，但会进入结构化题库并关联教材知识",
         }
         for path in candidate_files
         if path.suffix.lower() in QUESTION_BANK_EXTENSIONS
@@ -574,6 +772,11 @@ def build_knowledge_base(
             f"正在解析 {path.name}（{source_index + 1}/{len(source_files)}）",
         )
         suffix = path.suffix.lower()
+        declared_type = declared_types.get(path.name, "auto")
+        extracted: list[PageDocument] = []
+        extracted_questions: list[dict[str, Any]] = []
+        parser_name = suffix.lstrip(".")
+        warnings: list[str] = []
         if suffix == ".pdf":
             extracted = extract_pdf(path, chapter_limit)
             extracted, pdf_elements, audit = enhance_pdf(
@@ -582,33 +785,74 @@ def build_knowledge_base(
                 output_dir,
                 model_config=model_config,
             )
-            documents.extend(extracted)
             elements.extend(pdf_elements)
             cleaning_audits.extend(
                 {**item, "source": path.name} for item in audit
             )
-            _write_clean_markdown(path, extracted, cleaned_dir)
         elif suffix in {".md", ".txt"}:
             extracted = extract_markdown_or_text(path)
-            documents.extend(extracted)
-            _write_clean_markdown(path, extracted, cleaned_dir)
         elif suffix == ".docx":
             extracted = extract_docx(path)
+
+        document_type = classify_document(path, extracted, declared_type)
+        for document in extracted:
+            document.doc_type = document_type
+        if extracted:
             documents.extend(extracted)
             _write_clean_markdown(path, extracted, cleaned_dir)
+        if document_type in {"exam", "question_bank"} and extracted:
+            extracted_questions = extract_questions_from_documents(extracted, path.name)
+            questions.extend(extracted_questions)
+        if suffix == ".pdf" and not extracted:
+            warnings.append("未提取到可用内容，请检查 PDF 解析或视觉模型配置")
+        source_manifest.append(
+            {
+                "source": path.name,
+                "document_type": document_type,
+                "declared_type": declared_type,
+                "pages_or_sections": len(extracted),
+                "questions": len(extracted_questions),
+                "parser": parser_name,
+                "warnings": warnings,
+            }
+        )
         report(
             10 + int((source_index + 1) / source_count * 35),
             "document_cleaning",
             f"已完成 {path.name} 的解析与清洗",
         )
+    for path in candidate_files:
+        suffix = path.suffix.lower()
+        if suffix not in QUESTION_BANK_EXTENSIONS:
+            continue
+        extracted_questions = (
+            extract_question_xlsx(path) if suffix == ".xlsx" else extract_question_json(path)
+        )
+        questions.extend(extracted_questions)
+        source_manifest.append(
+            {
+                "source": path.name,
+                "document_type": "question_bank",
+                "declared_type": declared_types.get(path.name, "auto"),
+                "pages_or_sections": 0,
+                "questions": len(extracted_questions),
+                "parser": suffix.lstrip("."),
+                "warnings": [] if extracted_questions else ["未识别到符合结构的题目"],
+            }
+        )
+
     structured_questions = {
-        "schema_version": "2.0",
-        "questions": [],
+        "schema_version": "2.1",
+        "questions": questions,
         "excluded_sources": excluded_sources,
-        "message": "题库与课程知识库隔离；本文件仅保留兼容占位。",
+        "message": "题库与课程正文向量隔离，并通过知识关联表连接教材章节。",
     }
     (output_dir / "question_bank.json").write_text(
         json.dumps(structured_questions, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (output_dir / "source_manifest.json").write_text(
+        json.dumps({"schema_version": "1.1", "sources": source_manifest}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
     )
 
     report(50, "chunking", "正在切分文本并整理多模态元素")
@@ -655,6 +899,83 @@ def build_knowledge_base(
         batch_size=32,
         show_progress_bar=True,
     )
+
+    # Questions remain outside the authoritative course vector index, but they
+    # receive their own embeddings so every imported exam/question can point to
+    # the most relevant textbook chunks with auditable page-level provenance.
+    relations: list[dict[str, Any]] = []
+    related_by_question: dict[str, list[dict[str, Any]]] = {}
+    question_items = question_chunks(questions)
+    if question_items:
+        question_embeddings = encode_texts(
+            embedding_model_path,
+            [
+                "\n".join(
+                    filter(None, [item.section, " ".join(item.knowledge_tags), item.text])
+                )
+                for item in question_items
+            ],
+            batch_size=32,
+            show_progress_bar=False,
+        )
+    else:
+        question_embeddings = np.empty((0, embeddings.shape[1]), dtype=np.float32)
+    textbook_indices = [
+        index
+        for index, chunk in enumerate(chunks)
+        if chunk.doc_type in {"textbook", "notes"}
+    ]
+    for question_index, question_chunk in enumerate(question_items):
+        if not textbook_indices:
+            break
+        similarities = embeddings[textbook_indices] @ question_embeddings[question_index]
+        shared_tag_sets = [
+            set(question_chunk.knowledge_tags) & set(chunks[target].knowledge_tags)
+            for target in textbook_indices
+        ]
+        combined_scores = np.asarray(
+            [
+                float(similarity) + min(0.18, 0.08 * len(shared_tags))
+                for similarity, shared_tags in zip(similarities, shared_tag_sets)
+            ],
+            dtype=np.float32,
+        )
+        for rank in np.argsort(combined_scores)[::-1][:5]:
+            target_index = textbook_indices[int(rank)]
+            target = chunks[target_index]
+            shared_tags = sorted(shared_tag_sets[int(rank)])
+            semantic_score = float(similarities[int(rank)])
+            if semantic_score < 0.22 and not shared_tags:
+                continue
+            question_id = question_chunk.id.removeprefix("question-")
+            relation = {
+                "question_id": question_id,
+                "question_chunk_id": question_chunk.id,
+                "knowledge_chunk_id": target.id,
+                "knowledge_source": target.source,
+                "chapter": target.chapter,
+                "section": target.section,
+                "page": target.page_start,
+                "shared_knowledge_tags": shared_tags,
+                "score": round(float(combined_scores[int(rank)]), 4),
+                "semantic_score": round(semantic_score, 4),
+                "relation_type": "supported_by",
+            }
+            relations.append(relation)
+            related_by_question.setdefault(question_id, []).append(relation)
+    for question in questions:
+        question["related_knowledge"] = related_by_question.get(
+            str(question.get("question_id")), []
+        )
+    structured_questions["questions"] = questions
+    (output_dir / "question_bank.json").write_text(
+        json.dumps(structured_questions, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (output_dir / "knowledge_relations.jsonl").write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False) for item in relations),
+        encoding="utf-8",
+    )
+
     report(82, "validation", "正在校验向量与图谱完整性")
     validation = validate_build_artifacts(chunks, embeddings, graph)
     import faiss
@@ -681,9 +1002,20 @@ def build_knowledge_base(
         "resource_dir": str(resources_dir),
         "embedding_model": str(embedding_model_path),
         "dimension": int(embeddings.shape[1]),
-        "documents": len(source_files),
+        "documents": len(candidate_files),
+        "indexed_documents": sum(
+            1
+            for item in source_manifest
+            if item["pages_or_sections"] > 0 or item["questions"] > 0
+        ),
+        "failed_documents": sum(
+            1
+            for item in source_manifest
+            if item["pages_or_sections"] == 0 and item["questions"] == 0
+        ),
         "text_pages": len(documents),
-        "questions": 0,
+        "questions": len(questions),
+        "relations": len(relations),
         "excluded_sources": excluded_sources,
         "chunks": len(chunks),
         "layout_elements": len(elements),
@@ -705,7 +1037,8 @@ def build_knowledge_base(
             else {"enabled": False}
         ),
         "chapter_limit": chapter_limit,
-        "sources": [path.name for path in source_files],
+        "sources": [path.name for path in candidate_files],
+        "source_manifest": source_manifest,
         "validation": validation,
     }
     metadata["pipeline_layers"] = {
@@ -716,7 +1049,7 @@ def build_knowledge_base(
             "partial_characters_removed": sum(
                 int(item.get("removed_characters", 0)) for item in cleaning_audits
             ),
-            "question_banks_excluded": len(excluded_sources),
+            "question_banks_isolated": len(excluded_sources),
         },
         "document_parsing": {
             "status": "ready",
@@ -744,7 +1077,8 @@ def build_knowledge_base(
         "retrieval_service": {
             "status": "ready",
             "strategies": ["vector", "BM25", "knowledge-graph", "rerank"],
-            "question_bank_search": False,
+            "question_bank_search": bool(questions),
+            "question_knowledge_relations": len(relations),
         },
         "application": {
             "status": "ready",

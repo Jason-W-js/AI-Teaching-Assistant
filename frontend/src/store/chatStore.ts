@@ -1,7 +1,5 @@
 import { create } from 'zustand'
-import { AttachmentInfo, KBStatus, ModelConfig, ModelProviderId, SourceInfo, StoredMessage, streamChat, uploadChatAttachment } from '../lib/api'
-
-export type ChatMode = 'auto' | 'answer' | 'quiz' | 'plan'
+import { AttachmentInfo, ModelConfig, ModelProviderId, SourceInfo, StoredMessage, streamChat, TutorAction, TutoringMode, uploadChatAttachment } from '../lib/api'
 
 export type ChatMessage = {
   id: string
@@ -13,6 +11,12 @@ export type ChatMessage = {
   attachments?: AttachmentInfo[]
   model?: string
   provider?: ModelProviderId
+  hintLevel?: number
+  tutorAction?: TutorAction
+  diagnosis?: Record<string, unknown>
+  createdAt?: string
+  retryContent?: string
+  retryAttachmentIds?: string[]
 }
 
 export type PendingAttachment = {
@@ -27,15 +31,14 @@ export type PendingAttachment = {
 }
 
 const sessionKey = 'circuitmind-session-id'
-const studentKey = 'circuitmind-student-id'
 const modelConfigKey = 'circuitmind-model-config'
-const defaultKnowledgeBaseKey = 'circuitmind-default-knowledge-base'
+const knowledgeBaseKey = 'circuitmind-knowledge-base'
 
 const defaultModelConfig: ModelConfig = {
-  provider: 'ollama',
-  model: 'qwen3.5:2b',
+  provider: 'lmstudio',
+  model: 'qwen/qwen3.5-9b',
   apiKey: '',
-  baseUrl: 'http://127.0.0.1:11434',
+  baseUrl: 'http://127.0.0.1:1234/v1',
 }
 
 function getSessionId() {
@@ -47,127 +50,74 @@ function getSessionId() {
   return value
 }
 
-function canonicalModel(provider: ModelProviderId, model: string) {
-  const normalized = model.trim()
-  if (provider !== 'qwen') return normalized
-  const canonical = normalized.toLowerCase()
-  if (canonical === 'qwen3-vl-embedding' || canonical === 'qwen3-vl-8b-instruct') {
-    return 'qwen3-vl-flash'
-  }
-  return canonical
-}
-
-function getStudentId() {
-  let value = localStorage.getItem(studentKey)
-  if (!value) {
-    value = `learner-${crypto.randomUUID()}`
-    localStorage.setItem(studentKey, value)
-  }
-  return value
+function getKnowledgeBase() {
+  const value = localStorage.getItem(knowledgeBaseKey)?.trim() || 'default'
+  return /^[A-Za-z0-9_-]{1,48}$/.test(value) ? value : 'default'
 }
 
 function getModelConfig(): ModelConfig {
   try {
     const stored = JSON.parse(localStorage.getItem(modelConfigKey) || '{}')
-    const providers: ModelProviderId[] = ['ollama', 'deepseek', 'qwen', 'custom']
+    const providers: ModelProviderId[] = ['ollama', 'lmstudio', 'deepseek', 'qwen', 'custom']
     if (!providers.includes(stored.provider) || typeof stored.model !== 'string') {
       return defaultModelConfig
     }
-    const config = {
+    return {
       provider: stored.provider,
-      model: canonicalModel(stored.provider, stored.model || defaultModelConfig.model),
+      model: stored.model || defaultModelConfig.model,
       apiKey: typeof stored.apiKey === 'string' ? stored.apiKey : '',
       baseUrl: typeof stored.baseUrl === 'string' ? stored.baseUrl : '',
     }
-    localStorage.setItem(modelConfigKey, JSON.stringify(config))
-    return config
   } catch {
     return defaultModelConfig
   }
 }
 
-function getDefaultKnowledgeBase(): string {
-  const stored = localStorage.getItem(defaultKnowledgeBaseKey)?.trim() || ''
-  return /^[A-Za-z0-9_-]{1,48}$/.test(stored) ? stored : ''
-}
-
-const initialKnowledgeBase = getDefaultKnowledgeBase()
-
 type ChatState = {
-  studentId: string
   sessionId: string
-  mode: ChatMode
+  tutoringMode: TutoringMode
   knowledgeBase: string
-  defaultKnowledgeBase: string
   modelConfig: ModelConfig
   messages: ChatMessage[]
   streaming: boolean
   stage: string
   stageAgent: string
   activeSources: SourceInfo[]
+  hintLevel: number
   pendingAttachments: PendingAttachment[]
   controller?: AbortController
-  setMode: (mode: ChatMode) => void
+  setTutoringMode: (mode: TutoringMode) => void
   setKnowledgeBase: (id: string) => void
-  setDefaultKnowledgeBase: (id: string) => void
-  syncKnowledgeBases: (knowledgeBases: KBStatus[]) => void
   setModelConfig: (config: ModelConfig) => void
   addAttachments: (files: File[]) => Promise<void>
   removeAttachment: (localId: string) => void
   loadSession: (sessionId: string, messages: StoredMessage[]) => void
-  send: (message: string) => Promise<void>
+  send: (message: string, attachmentIds?: string[]) => Promise<void>
   stop: () => void
   clear: () => void
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
-  studentId: getStudentId(),
   sessionId: getSessionId(),
-  mode: 'auto',
-  knowledgeBase: initialKnowledgeBase,
-  defaultKnowledgeBase: initialKnowledgeBase,
+  tutoringMode: 'guided',
+  knowledgeBase: getKnowledgeBase(),
   modelConfig: getModelConfig(),
   messages: [],
   streaming: false,
   stage: '',
   stageAgent: '',
   activeSources: [],
+  hintLevel: 1,
   pendingAttachments: [],
-  setMode: (mode) => set({ mode }),
-  setKnowledgeBase: (knowledgeBase) => set({ knowledgeBase }),
-  setDefaultKnowledgeBase: (defaultKnowledgeBase) => {
-    if (!defaultKnowledgeBase) {
-      localStorage.removeItem(defaultKnowledgeBaseKey)
-      set({ defaultKnowledgeBase: '', knowledgeBase: '' })
-      return
-    }
-    if (!/^[A-Za-z0-9_-]{1,48}$/.test(defaultKnowledgeBase)) return
-    localStorage.setItem(defaultKnowledgeBaseKey, defaultKnowledgeBase)
-    set({ defaultKnowledgeBase, knowledgeBase: defaultKnowledgeBase })
-  },
-  syncKnowledgeBases: (knowledgeBases) => {
-    const currentDefault = get().defaultKnowledgeBase
-    const available = knowledgeBases.filter((item) => item.state === 'ready' || item.available)
-    if (available.some((item) => item.id === currentDefault)) return
-
-    const replacement = available[0]?.id || ''
-    if (replacement) {
-      localStorage.setItem(defaultKnowledgeBaseKey, replacement)
-    } else {
-      localStorage.removeItem(defaultKnowledgeBaseKey)
-    }
-    set((state) => ({
-      defaultKnowledgeBase: replacement,
-      knowledgeBase:
-        !state.knowledgeBase || state.knowledgeBase === currentDefault
-          ? replacement
-          : state.knowledgeBase,
-    }))
+  setTutoringMode: (tutoringMode) => set({ tutoringMode }),
+  setKnowledgeBase: (knowledgeBase) => {
+    if (!/^[A-Za-z0-9_-]{1,48}$/.test(knowledgeBase)) return
+    localStorage.setItem(knowledgeBaseKey, knowledgeBase)
+    set({ knowledgeBase })
   },
   setModelConfig: (modelConfig) => {
-    const normalized = { ...modelConfig, model: canonicalModel(modelConfig.provider, modelConfig.model) }
-    localStorage.setItem(modelConfigKey, JSON.stringify(normalized))
-    set({ modelConfig: normalized })
+    localStorage.setItem(modelConfigKey, JSON.stringify(modelConfig))
+    set({ modelConfig })
   },
   addAttachments: async (files) => {
     const available = Math.max(0, 5 - get().pendingAttachments.length)
@@ -215,7 +165,26 @@ export const useChatStore = create<ChatState>((set, get) => ({
       agent: item.agent,
       provider: item.provider,
       model: item.model,
+      failed: item.failed,
+      retryContent: item.retry_message,
+      retryAttachmentIds: item.retry_attachment_ids || (item.role === 'user' ? item.attachment_ids : undefined),
+      createdAt: item.created_at,
     }))
+    const lastMessage = messages.at(-1)
+    if (lastMessage?.role === 'user') {
+      messages.push({
+        id: `recovery-${lastMessage.id}`,
+        role: 'assistant',
+        content: '> ⚠️ 上一次回答在完成前中断，原问题已经保留。',
+        agent: '系统恢复',
+        provider: get().modelConfig.provider,
+        model: get().modelConfig.model,
+        failed: true,
+        retryContent: lastMessage.content.split('\n[附件：', 1)[0],
+        retryAttachmentIds: lastMessage.retryAttachmentIds,
+        createdAt: new Date().toISOString(),
+      })
+    }
     set({
       sessionId,
       messages,
@@ -223,37 +192,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
       stage: '',
       stageAgent: '',
       activeSources: [],
+      hintLevel: 1,
       pendingAttachments: [],
       controller: undefined,
     })
   },
-  send: async (rawMessage) => {
+  send: async (rawMessage, retryAttachmentIds = []) => {
     const readyAttachments = get().pendingAttachments
       .filter((item) => item.status === 'ready' && item.attachment)
       .map((item) => item.attachment!)
     const hasUnfinished = get().pendingAttachments.some((item) => item.status !== 'ready')
+    const attachmentIds = retryAttachmentIds.length
+      ? retryAttachmentIds
+      : readyAttachments.map((item) => item.id)
     const message = rawMessage.trim() || (
       readyAttachments.length
-        ? get().mode === 'quiz'
-          ? '请根据附件中的原题生成一道同类型新题。'
-          : '请识别并解答附件中的电路题。'
+        ? '请识别附件中的电路题，并按我选择的辅导模式帮助我。'
         : ''
     )
-    if ((!message && !readyAttachments.length) || get().streaming || hasUnfinished) return
+    if ((!message && !attachmentIds.length) || get().streaming || hasUnfinished) return
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: 'user',
       content: message,
       attachments: readyAttachments,
+      createdAt: new Date().toISOString(),
     }
     const assistantId = crypto.randomUUID()
     const selectedModel = get().modelConfig
+    const effectiveHintLevel = get().tutoringMode === 'full' ? 5 : Math.max(1, Math.min(5, get().hintLevel))
     const assistantMessage: ChatMessage = {
       id: assistantId,
       role: 'assistant',
       content: '',
       model: selectedModel.model,
       provider: selectedModel.provider,
+      createdAt: new Date().toISOString(),
     }
     const controller = new AbortController()
     set((state) => ({
@@ -270,9 +244,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
         {
           session_id: get().sessionId,
           message,
-          mode: get().mode,
+          mode: 'auto',
+          tutor_action: 'auto',
+          hint_level: effectiveHintLevel,
+          tutoring_mode: get().tutoringMode,
           knowledge_base: get().knowledgeBase,
-          attachment_ids: readyAttachments.map((item) => item.id),
+          attachment_ids: attachmentIds,
           model_provider: selectedModel.provider,
           model: selectedModel.model,
           api_key: selectedModel.apiKey,
@@ -283,9 +260,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
           onMeta: (data) => {
             set((state) => ({
               activeSources: data.sources || [],
+              hintLevel: data.hint_level || state.hintLevel,
               messages: state.messages.map((item) =>
                 item.id === assistantId
-                  ? { ...item, agent: data.agent, provider: data.provider, model: data.model, sources: data.sources }
+                  ? { ...item, agent: data.agent, provider: data.provider, model: data.model, sources: data.sources, hintLevel: data.hint_level, tutorAction: data.tutor_action, diagnosis: data.diagnosis }
                   : item,
               ),
             }))
@@ -310,6 +288,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
                         ? `${item.content}\n\n> ⚠️ 生成未完整结束：${error}`
                         : `生成失败：${error}`,
                       failed: true,
+                      retryContent: message,
+                      retryAttachmentIds: attachmentIds,
                     }
                   : item,
               ),
@@ -321,7 +301,25 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({ streaming: false, stage: '', stageAgent: '', controller: undefined })
     } catch (error) {
       if ((error as Error).name === 'AbortError') {
-        set({ streaming: false, stage: '已停止生成', stageAgent: '', controller: undefined })
+        set((state) => ({
+          streaming: false,
+          stage: '',
+          stageAgent: '',
+          controller: undefined,
+          messages: state.messages.map((item) =>
+            item.id === assistantId
+              ? {
+                  ...item,
+                  content: item.content
+                    ? `${item.content}\n\n> ⚠️ 生成已停止，可以重新生成本题。`
+                    : '> ⚠️ 生成已停止，原问题已经保留。',
+                  failed: true,
+                  retryContent: message,
+                  retryAttachmentIds: attachmentIds,
+                }
+              : item,
+          ),
+        }))
         return
       }
       const detail = error instanceof Error ? error.message : '未知错误'
@@ -337,6 +335,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
                   ? `${item.content}\n\n> ⚠️ 回答连接提前结束：${detail}`
                   : `连接失败：${detail}`,
                 failed: true,
+                retryContent: message,
+                retryAttachmentIds: attachmentIds,
               }
             : item,
         ),
@@ -350,15 +350,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const sessionId = `student-${crypto.randomUUID()}`
     localStorage.setItem(sessionKey, sessionId)
     get().controller?.abort()
-    set({
-      sessionId,
-      knowledgeBase: get().defaultKnowledgeBase,
-      messages: [],
-      streaming: false,
-      stage: '',
-      activeSources: [],
-      pendingAttachments: [],
-      controller: undefined,
-    })
+    set({ sessionId, messages: [], streaming: false, stage: '', activeSources: [], hintLevel: 1, pendingAttachments: [], controller: undefined })
   },
 }))

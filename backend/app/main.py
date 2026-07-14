@@ -21,19 +21,22 @@ from backend.app.agents.workflow import CircuitTutorEngine
 from backend.app.config import settings
 from backend.app.rag.manager import KnowledgeBaseManager
 from backend.app.rag.multimodal import BuildModelConfig
-from backend.app.schemas import ChatRequest, KnowledgeBaseRebuildRequest, MistakeCreateRequest
+from backend.app.rag.pipeline import INGESTION_MANIFEST
+from backend.app.schemas import (
+    ChatRequest,
+    KnowledgeBaseRebuildRequest,
+    WrongQuestionCategoryCreate,
+    WrongQuestionCreate,
+    WrongQuestionUpdate,
+)
 from backend.app.services.memory import ConversationMemory
 from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
-from backend.app.services.mistake_book import MistakeBook
-from backend.app.services.model_catalog import (
-    QWEN_MODELS,
-    QWEN_MODEL_OPTIONS,
-    canonical_model_id,
-    chat_model_unavailable_reason,
-    choose_default_model,
-)
+from backend.app.services.problem_sessions import ProblemSessionStore
+from backend.app.services.knowledge_graph import KnowledgeGraphService
+from backend.app.services.wrong_notebook import WrongNotebookStore
+from backend.app.services.model_catalog import canonical_model_id
 
 
 def configure_logging() -> None:
@@ -58,12 +61,42 @@ def configure_logging() -> None:
 configure_logging()
 logger = logging.getLogger(__name__)
 
+
+class FirstTokenTimeoutError(TimeoutError):
+    """Raised only when a workflow has not produced visible content in time."""
+
 ollama = OllamaClient()
+lmstudio = OpenAICompatibleClient(
+    provider="lmstudio",
+    model=settings.lmstudio_model,
+    base_url=settings.lmstudio_base_url,
+    allow_images=True,
+    trust_env=False,
+)
+specialist_clients = {
+    role: OpenAICompatibleClient(
+        provider="lmstudio",
+        model=model,
+        base_url=settings.lmstudio_base_url,
+        allow_images=role == "understanding",
+        trust_env=False,
+    )
+    for role, model in {
+        "understanding": settings.understanding_model,
+        "solver": settings.solver_model,
+        "diagnosis": settings.diagnosis_model,
+        "tutor": settings.tutor_model,
+    }.items()
+    if model
+}
 memory = ConversationMemory()
 knowledge_bases = KnowledgeBaseManager()
-engine = CircuitTutorEngine(ollama, knowledge_bases)
+problem_sessions = ProblemSessionStore()
+engine = CircuitTutorEngine(ollama, knowledge_bases, problem_sessions)
 attachments = AttachmentStore()
-mistake_book = MistakeBook()
+wrong_notebook = WrongNotebookStore()
+knowledge_graph = KnowledgeGraphService(knowledge_bases)
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -71,6 +104,8 @@ async def lifespan(_: FastAPI):
     await memory.connect()
     yield
     await ollama.close()
+    await lmstudio.close()
+    await asyncio.gather(*(client.close() for client in specialist_clients.values()))
     await memory.close()
     knowledge_bases.close_all()
 
@@ -135,14 +170,12 @@ def response_chunks(content: str) -> list[str]:
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    model_health = await ollama.health()
-    remote_configured = bool(settings.qwen_api_key or settings.deepseek_api_key)
+    ollama_health, lmstudio_health = await asyncio.gather(ollama.health(), lmstudio.health())
+    default_health = lmstudio_health if settings.default_model_provider == "lmstudio" else ollama_health
     return {
-        # Ollama is optional: the web/API service itself remains healthy and a
-        # configured compatible API can be used while the local daemon is down.
-        "status": "ok",
-        "model_ready": bool(model_health.get("ok") or remote_configured),
-        "ollama": model_health,
+        "status": "ok" if default_health.get("ok") else "degraded",
+        "ollama": ollama_health,
+        "lmstudio": lmstudio_health,
         "memory": memory.backend,
         "knowledge_bases": knowledge_bases.statuses(),
         "thinking_enabled": True,
@@ -155,7 +188,7 @@ async def knowledge_base_status() -> dict[str, Any]:
 
 
 @app.get("/api/kb/{knowledge_base}/graph")
-async def knowledge_graph(knowledge_base: str) -> dict[str, Any]:
+async def persisted_knowledge_graph(knowledge_base: str) -> dict[str, Any]:
     try:
         return knowledge_bases.graph(knowledge_base)
     except ValueError as exc:
@@ -170,10 +203,12 @@ async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[s
     base_url = payload.base_url
     if payload.model_provider == "deepseek":
         api_key = api_key or settings.deepseek_api_key
-        base_url = (base_url or settings.deepseek_base_url) if payload.api_key else settings.deepseek_base_url
+        base_url = base_url or settings.deepseek_base_url
     elif payload.model_provider == "qwen":
         api_key = api_key or settings.qwen_api_key
-        base_url = (base_url or settings.qwen_base_url) if payload.api_key else settings.qwen_base_url
+        base_url = base_url or settings.qwen_base_url
+    elif payload.model_provider == "lmstudio":
+        base_url = base_url or settings.lmstudio_base_url
     config = BuildModelConfig(
         provider=payload.model_provider,
         model=canonical_model_id(payload.model_provider, payload.model),
@@ -235,6 +270,104 @@ async def conversation_sessions() -> dict[str, Any]:
     return {"sessions": await memory.list_sessions()}
 
 
+@app.get("/api/wrong-questions")
+async def wrong_questions() -> dict[str, Any]:
+    return await wrong_notebook.snapshot()
+
+
+@app.post("/api/wrong-questions/categories")
+async def create_wrong_question_category(
+    payload: WrongQuestionCategoryCreate,
+) -> dict[str, Any]:
+    try:
+        return {"category": await wrong_notebook.create_category(payload.name)}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.patch("/api/wrong-questions/categories/{category_id}")
+async def rename_wrong_question_category(
+    category_id: str, payload: WrongQuestionCategoryCreate
+) -> dict[str, Any]:
+    try:
+        category = await wrong_notebook.rename_category(category_id, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if category is None:
+        raise HTTPException(status_code=404, detail="错题分类不存在")
+    return {"category": category}
+
+
+@app.delete("/api/wrong-questions/categories/{category_id}")
+async def delete_wrong_question_category(category_id: str) -> dict[str, Any]:
+    try:
+        deleted = await wrong_notebook.delete_category(category_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="错题分类不存在")
+    return {"ok": True}
+
+
+@app.post("/api/wrong-questions")
+async def create_wrong_question(payload: WrongQuestionCreate) -> dict[str, Any]:
+    try:
+        knowledge_bases.validate_id(payload.knowledge_base)
+        message_values = [item.model_dump() for item in payload.messages]
+        combined = "\n".join(item["content"] for item in message_values)
+        knowledge_points = knowledge_graph.infer_knowledge_points(
+            combined, payload.knowledge_base
+        )
+        item = await wrong_notebook.create(
+            session_id=payload.session_id,
+            title=payload.title,
+            category_id=payload.category_id,
+            knowledge_base=payload.knowledge_base,
+            messages=message_values,
+            knowledge_points=knowledge_points,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"item": item}
+
+
+@app.patch("/api/wrong-questions/{item_id}")
+async def update_wrong_question(
+    item_id: str, payload: WrongQuestionUpdate
+) -> dict[str, Any]:
+    try:
+        item = await wrong_notebook.update(
+            item_id, title=payload.title, category_id=payload.category_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="错题记录不存在")
+    return {"item": item}
+
+
+@app.delete("/api/wrong-questions/{item_id}")
+async def delete_wrong_question(item_id: str) -> dict[str, Any]:
+    if not await wrong_notebook.delete(item_id):
+        raise HTTPException(status_code=404, detail="错题记录不存在")
+    return {"ok": True}
+
+
+@app.get("/api/knowledge-graph")
+async def course_knowledge_graph(knowledge_base: str = "default") -> dict[str, Any]:
+    try:
+        knowledge_bases.validate_id(knowledge_base)
+        notebook = await wrong_notebook.snapshot()
+        relevant_wrong_questions = [
+            item
+            for item in notebook["items"]
+            if item.get("knowledge_base", "default") == knowledge_base
+        ]
+        return knowledge_graph.build(knowledge_base, relevant_wrong_questions)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.get("/api/sessions/{session_id}")
 async def conversation_session(session_id: str) -> dict[str, Any]:
     try:
@@ -252,29 +385,34 @@ async def delete_conversation_session(session_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     deleted_history = await memory.delete(session_id)
     deleted_attachments = await attachments.delete_session(session_id)
-    if not deleted_history and not deleted_attachments:
+    deleted_problem = await problem_sessions.delete(session_id)
+    if not deleted_history and not deleted_attachments and not deleted_problem:
         raise HTTPException(status_code=404, detail="历史会话不存在或已被删除")
     return {"ok": True, "session_id": session_id}
 
 
 @app.get("/api/models")
 async def available_models() -> dict[str, Any]:
-    model_health = await ollama.health()
-    local_models = model_health.get("models", [])
+    model_health, lmstudio_health = await asyncio.gather(ollama.health(), lmstudio.health())
+    local_models = model_health.get("models", []) if model_health.get("ok") else model_health.get("models", [])
     if settings.ollama_model not in local_models:
         local_models = [settings.ollama_model, *local_models]
-    default_provider, default_model = choose_default_model(
-        model_health,
-        ollama_model=settings.ollama_model,
-        qwen_model=settings.qwen_vision_model,
-        deepseek_model=settings.deepseek_model,
-        qwen_configured=bool(settings.qwen_api_key),
-        deepseek_configured=bool(settings.deepseek_api_key),
-    )
     return {
-        "default": {"provider": default_provider, "model": default_model},
-        "ollama_available": bool(model_health.get("ok")),
+        "default": {
+            "provider": settings.default_model_provider,
+            "model": settings.lmstudio_model if settings.default_model_provider == "lmstudio" else settings.ollama_model,
+        },
         "providers": [
+            {
+                "id": "lmstudio",
+                "label": "本地 LM Studio",
+                "description": "通过本机 OpenAI 兼容接口运行模型，数据不离开本机",
+                "models": list(dict.fromkeys([settings.lmstudio_model, *lmstudio_health.get("models", [])])),
+                "default_model": settings.lmstudio_model,
+                "base_url": settings.lmstudio_base_url,
+                "requires_api_key": False,
+                "configured": bool(lmstudio_health.get("ok")),
+            },
             {
                 "id": "ollama",
                 "label": "本地 Ollama",
@@ -284,7 +422,6 @@ async def available_models() -> dict[str, Any]:
                 "base_url": settings.ollama_base_url,
                 "requires_api_key": False,
                 "configured": bool(model_health.get("ok")),
-                "status_message": "Ollama 已连接" if model_health.get("ok") else "Ollama 未启动，可稍后重试",
             },
             {
                 "id": "deepseek",
@@ -299,10 +436,9 @@ async def available_models() -> dict[str, Any]:
             {
                 "id": "qwen",
                 "label": "通义千问 API",
-                "description": "阿里云百炼文本与多模态 OpenAI 兼容接口",
-                "models": list(dict.fromkeys([*QWEN_MODELS, settings.qwen_vision_model])),
-                "model_options": QWEN_MODEL_OPTIONS,
-                "default_model": settings.qwen_vision_model,
+                "description": "阿里云百炼 OpenAI 兼容接口",
+                "models": ["qwen-plus", "qwen-max", "qwen-turbo"],
+                "default_model": "qwen-plus",
                 "base_url": settings.qwen_base_url,
                 "requires_api_key": True,
                 "configured": bool(settings.qwen_api_key),
@@ -321,94 +457,33 @@ async def available_models() -> dict[str, Any]:
     }
 
 
-def _fallback_knowledge_points(content: str) -> list[str]:
-    candidates = (
-        "PN结", "二极管", "稳压二极管", "晶体管", "三极管", "场效应管", "静态工作点",
-        "共射放大电路", "相量", "复阻抗", "功率因数", "有功功率", "无功功率", "RLC",
-        "谐振", "KCL", "KVL", "戴维南定理", "诺顿定理",
-    )
-    matched = [point for point in candidates if point.lower() in content.lower()]
-    return matched[:8] or ["电路基础"]
-
-
-async def _extract_mistake_metadata(payload: MistakeCreateRequest) -> tuple[list[str], str]:
-    client: Any | None = None
-    should_close = False
-    prompt = (
-        "你是电路课程错题归档助手。只输出合法 JSON，字段 knowledge_points（1-8个准确知识点）"
-        "和 summary（不超过40字的题目摘要）。先识别真正考查内容，不要把‘计算’‘题目’当知识点。\n"
-        f"待归档内容：\n{payload.content[:12000]}"
-    )
-    try:
-        client, should_close = select_model_client(payload)
-        result_text = await client.chat(
-            [{"role": "user", "content": prompt}],
-            temperature=0.0,
-            json_mode=True,
-            reasoning_budget=96,
-        )
-        match = re.search(r"\{.*\}", result_text, re.S)
-        value = json.loads(match.group(0) if match else result_text)
-        points = value.get("knowledge_points", [])
-        if not isinstance(points, list):
-            points = []
-        normalized = [str(point).strip() for point in points if str(point).strip()]
-        summary = str(value.get("summary", "")).strip()
-        return normalized[:8] or _fallback_knowledge_points(payload.content), summary or payload.content[:40]
-    except Exception:
-        logger.warning("Mistake knowledge extraction fell back to local rules", exc_info=True)
-        return _fallback_knowledge_points(payload.content), payload.content.splitlines()[0][:40]
-    finally:
-        if should_close and client is not None:
-            await client.close()
-
-
-@app.get("/api/mistakes")
-async def list_mistakes(student_id: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", student_id):
-        raise HTTPException(status_code=400, detail="学生标识不合法")
-    return {"mistakes": await mistake_book.list(student_id)}
-
-
-@app.post("/api/mistakes")
-async def add_mistake(payload: MistakeCreateRequest) -> dict[str, Any]:
-    knowledge_points, summary = await _extract_mistake_metadata(payload)
-    item = await mistake_book.add(
-        student_id=payload.student_id,
-        session_id=payload.session_id,
-        content=payload.content,
-        agent=payload.agent,
-        knowledge_points=knowledge_points,
-        summary=summary,
-    )
-    return {"ok": True, "mistake": item}
-
-
-@app.delete("/api/mistakes/{mistake_id}")
-async def delete_mistake(mistake_id: str, student_id: str) -> dict[str, Any]:
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", student_id) or not re.fullmatch(r"[a-f0-9]{32}", mistake_id):
-        raise HTTPException(status_code=400, detail="错题标识不合法")
-    if not await mistake_book.delete(student_id, mistake_id):
-        raise HTTPException(status_code=404, detail="错题不存在")
-    return {"ok": True}
-
-
 def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
-    model = canonical_model_id(payload.model_provider, payload.model)
-    unavailable_reason = chat_model_unavailable_reason(payload.model_provider, model)
-    if unavailable_reason:
-        raise ValueError(f"模型 {model} 不能用于对话：{unavailable_reason}")
     if payload.model_provider == "ollama":
-        if model == settings.ollama_model:
+        if payload.model == settings.ollama_model:
             return ollama, False
-        return OllamaClient(model=model), True
+        return OllamaClient(model=payload.model), True
+
+    if payload.model_provider == "lmstudio":
+        base_url = payload.base_url or settings.lmstudio_base_url
+        if payload.model == settings.lmstudio_model and base_url.rstrip("/") == settings.lmstudio_base_url.rstrip("/"):
+            return lmstudio, False
+        return (
+            OpenAICompatibleClient(
+                provider="lmstudio",
+                model=payload.model,
+                base_url=base_url,
+                allow_images=True,
+                trust_env=False,
+            ),
+            True,
+        )
 
     if payload.model_provider == "deepseek":
         api_key = payload.api_key or settings.deepseek_api_key
-        base_url = (payload.base_url or settings.deepseek_base_url) if payload.api_key else settings.deepseek_base_url
+        base_url = payload.base_url or settings.deepseek_base_url
     elif payload.model_provider == "qwen":
         api_key = payload.api_key or settings.qwen_api_key
-        base_url = (payload.base_url or settings.qwen_base_url) if payload.api_key else settings.qwen_base_url
+        base_url = payload.base_url or settings.qwen_base_url
     else:
         api_key = payload.api_key
         base_url = payload.base_url
@@ -420,7 +495,7 @@ def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
     return (
         OpenAICompatibleClient(
             provider=payload.model_provider,
-            model=model,
+            model=payload.model,
             api_key=api_key,
             base_url=base_url,
         ),
@@ -433,6 +508,38 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:
         selected_client: Any | None = None
         close_selected_client = False
+        task: asyncio.Task[Any] | None = None
+        user_persisted = False
+        assistant_persisted = False
+        effective_message = payload.message
+
+        async def persist_interruption(detail: str) -> None:
+            nonlocal assistant_persisted
+            if not user_persisted or assistant_persisted:
+                return
+            safe_detail = re.sub(r"\s+", " ", detail).strip()[:360]
+            content = (
+                f"> ⚠️ 本次回答未完成：{safe_detail or '生成连接意外中断'}\n\n"
+                "原问题已经保留，可以点击“重新生成本题”继续。"
+            )
+            try:
+                await memory.append(
+                    payload.session_id,
+                    "assistant",
+                    content,
+                    {
+                        "agent": "系统恢复",
+                        "provider": payload.model_provider,
+                        "model": payload.model,
+                        "failed": True,
+                        "retry_message": effective_message,
+                        "retry_attachment_ids": payload.attachment_ids,
+                    },
+                )
+                assistant_persisted = True
+            except Exception:
+                logger.exception("Unable to persist interrupted chat state")
+
         try:
             selected_client, close_selected_client = select_model_client(payload)
             yield sse(
@@ -455,9 +562,19 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
             memory_message = effective_message
             if attachment_names:
                 memory_message += f"\n[附件：{'、'.join(attachment_names)}]"
-            await memory.append(payload.session_id, "user", memory_message)
+            await memory.append(
+                payload.session_id,
+                "user",
+                memory_message,
+                {"attachment_ids": payload.attachment_ids},
+            )
+            user_persisted = True
             event_queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
             streamed_answer = False
+            last_event_at = perf_counter()
+            first_token_deadline = (
+                last_event_at + settings.chat_first_token_timeout_seconds
+            )
 
             async def on_status(status: dict[str, Any]) -> None:
                 await event_queue.put(("status", status))
@@ -467,25 +584,57 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
 
             task = asyncio.create_task(
                 engine.run(
+                    session_id=payload.session_id,
                     message=effective_message,
                     mode=payload.mode,
+                    tutor_action=payload.tutor_action,
+                    hint_level=payload.hint_level,
+                    tutoring_mode=payload.tutoring_mode,
                     knowledge_base=payload.knowledge_base,
                     history=history,
                     attachment_text=resolved.text,
                     attachment_images=resolved.images,
                     attachment_names=attachment_names,
                     llm=selected_client,
+                    agent_clients=specialist_clients,
                     on_status=on_status,
                     on_delta=on_delta,
                 )
             )
             while not task.done() or not event_queue.empty():
+                if not streamed_answer and not task.done():
+                    remaining = first_token_deadline - perf_counter()
+                    if remaining <= 0:
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        raise FirstTokenTimeoutError
+                    queue_wait_timeout = min(0.5, remaining)
+                else:
+                    # Once visible output starts there is intentionally no total
+                    # generation deadline.  The student can still stop it manually.
+                    queue_wait_timeout = 0.5
                 try:
-                    event_name, event_data = await asyncio.wait_for(event_queue.get(), timeout=0.2)
-                    if event_name == "delta":
+                    event_name, event_data = await asyncio.wait_for(
+                        event_queue.get(), timeout=queue_wait_timeout
+                    )
+                    if event_name == "delta" and event_data.get("content"):
                         streamed_answer = True
                     yield sse(event_name, event_data)
+                    last_event_at = perf_counter()
                 except asyncio.TimeoutError:
+                    if (
+                        not streamed_answer
+                        and not task.done()
+                        and perf_counter() >= first_token_deadline
+                    ):
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+                        raise FirstTokenTimeoutError
+                    if perf_counter() - last_event_at >= 8:
+                        # Keep the fetch/SSE connection alive while a local model
+                        # is doing a long non-streaming reasoning pass.
+                        yield ": keep-alive\n\n"
+                        last_event_at = perf_counter()
                     continue
             result = await task
             yield sse(
@@ -497,6 +646,10 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     "model": payload.model,
                     "sources": result.sources,
                     "verification": result.verification,
+                    "tutor_action": result.tutor_action,
+                    "hint_level": result.hint_level,
+                    "problem": result.problem,
+                    "diagnosis": result.diagnosis,
                 },
             )
             if not streamed_answer:
@@ -511,15 +664,44 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
                     "agent": result.agent,
                     "provider": payload.model_provider,
                     "model": payload.model,
+                    "intent": result.intent,
+                    "tutor_action": result.tutor_action,
                 },
             )
+            assistant_persisted = True
             yield sse("done", {"ok": True})
         except asyncio.CancelledError:
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            logger.info("Chat workflow cancelled for session %s", payload.session_id)
+            await persist_interruption("页面切换、停止生成或连接断开")
             raise
+        except FirstTokenTimeoutError:
+            detail = (
+                f"本地模型在 {settings.chat_first_token_timeout_seconds} 秒内未输出首个内容，"
+                "请确认 LM Studio 正常运行后重试"
+            )
+            logger.warning(
+                "Chat workflow produced no first token for session %s",
+                payload.session_id,
+            )
+            await persist_interruption(detail)
+            yield sse("error", {"message": detail})
         except Exception as exc:
             logger.exception("Chat workflow failed")
+            await persist_interruption(str(exc))
             yield sse("error", {"message": str(exc)})
         finally:
+            # StreamingResponse may close an async generator without surfacing a
+            # CancelledError.  Always terminate unfinished work and leave a
+            # durable retry record so the conversation can never end with only
+            # the user's question.
+            if user_persisted and not assistant_persisted:
+                if task is not None and not task.done():
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                await persist_interruption("页面切换、停止生成或连接断开")
             if close_selected_client and selected_client is not None:
                 await selected_client.close()
 
@@ -535,6 +717,7 @@ async def chat(payload: ChatRequest) -> StreamingResponse:
 
 
 ALLOWED_UPLOADS = {".pdf", ".md", ".txt", ".docx", ".xlsx", ".json", ".png", ".jpg", ".jpeg", ".webp"}
+DOCUMENT_TYPES = {"auto", "textbook", "exam", "question_bank", "notes"}
 
 
 @app.post("/api/attachments")
@@ -584,25 +767,11 @@ async def get_chat_attachment(attachment_id: str, session_id: str) -> FileRespon
     return FileResponse(path, media_type=meta["content_type"], filename=meta["name"])
 
 
-@app.post("/api/upload")
-async def upload(
-    file: UploadFile = File(...),
-    knowledge_base: str = Form("default"),
-    rebuild: bool = Form(True),
-    model_provider: str = Form("deepseek"),
-    model: str = Form(""),
-    api_key: str = Form(""),
-    base_url: str = Form(""),
-) -> dict[str, Any]:
-    try:
-        knowledge_base = knowledge_bases.validate_id(knowledge_base)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+async def _save_knowledge_file(file: UploadFile, target_dir: Path) -> dict[str, Any]:
     original_name = Path(file.filename or "upload.bin").name
     suffix = Path(original_name).suffix.lower()
     if suffix not in ALLOWED_UPLOADS:
         raise HTTPException(status_code=415, detail=f"不支持的文件类型：{suffix or '未知'}")
-    target_dir = knowledge_bases.resource_dir(knowledge_base)
     target_dir.mkdir(parents=True, exist_ok=True)
     target = target_dir / original_name
     size = 0
@@ -616,41 +785,88 @@ async def upload(
                 raise HTTPException(status_code=413, detail=f"文件不能超过 {settings.max_upload_mb} MB")
             handle.write(chunk)
     await file.close()
+    return {
+        "filename": original_name,
+        "size": size,
+        "content_type": file.content_type or mimetypes.guess_type(original_name)[0],
+        "indexable": suffix in {".pdf", ".md", ".txt", ".docx", ".xlsx", ".json"},
+    }
 
-    indexable = suffix in {".pdf", ".md", ".txt", ".docx"}
-    build_state: dict[str, Any] | None = None
+
+def _record_document_types(target_dir: Path, files: list[dict[str, Any]], document_type: str) -> None:
+    manifest_path = target_dir / INGESTION_MANIFEST
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8")) if manifest_path.exists() else {}
+    except json.JSONDecodeError:
+        manifest = {}
+    entries = manifest.setdefault("files", {})
+    for item in files:
+        if item["indexable"]:
+            entries[item["filename"]] = {"document_type": document_type}
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+@app.post("/api/upload")
+async def upload(
+    file: UploadFile = File(...),
+    knowledge_base: str = Form("default"),
+    rebuild: bool = Form(True),
+    document_type: str = Form("auto"),
+) -> dict[str, Any]:
+    try:
+        knowledge_base = knowledge_bases.validate_id(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if document_type not in DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail="资料类型不合法")
+    target_dir = knowledge_bases.resource_dir(knowledge_base)
+    saved = await _save_knowledge_file(file, target_dir)
+    _record_document_types(target_dir, [saved], document_type)
+    indexable = saved["indexable"]
     if rebuild and indexable:
-        provided_api_key = bool(api_key.strip())
-        if model_provider == "deepseek":
-            api_key = api_key or settings.deepseek_api_key
-            base_url = (base_url or settings.deepseek_base_url) if provided_api_key else settings.deepseek_base_url
-        elif model_provider == "qwen":
-            api_key = api_key or settings.qwen_api_key
-            base_url = (base_url or settings.qwen_base_url) if provided_api_key else settings.qwen_base_url
-        build_model = BuildModelConfig(
-            provider=model_provider,
-            model=canonical_model_id(model_provider, model),
-            api_key=api_key.strip(),
-            base_url=base_url.strip(),
-        )
         try:
-            build_state = knowledge_bases.start_build(
-                knowledge_base,
-                chapter_limit=None,
-                model_config=build_model if build_model.enabled else None,
-            )
+            knowledge_bases.start_build(knowledge_base, chapter_limit=None)
         except RuntimeError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
     return {
         "ok": True,
-        "filename": original_name,
-        "size": size,
-        "content_type": file.content_type or mimetypes.guess_type(original_name)[0],
+        **{key: saved[key] for key in ("filename", "size", "content_type")},
         "knowledge_base": knowledge_base,
         "indexing": bool(rebuild and indexable),
-        "build": build_state,
-        "multimodal_model": f"{model_provider}/{model}" if model else "未配置，使用安全降级",
         "message": "文件已保存，知识库正在后台更新" if rebuild and indexable else "文件已保存",
+    }
+
+
+@app.post("/api/kb/ingest")
+async def ingest_knowledge_files(
+    files: list[UploadFile] = File(...),
+    knowledge_base: str = Form("default"),
+    document_type: str = Form("auto"),
+) -> dict[str, Any]:
+    """Batch ingestion prevents rebuilding the same index once per uploaded file."""
+    try:
+        knowledge_base = knowledge_bases.validate_id(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if document_type not in DOCUMENT_TYPES:
+        raise HTTPException(status_code=400, detail="资料类型不合法")
+    if not files or len(files) > 20:
+        raise HTTPException(status_code=400, detail="每批请上传 1 到 20 个文件")
+    target_dir = knowledge_bases.resource_dir(knowledge_base)
+    saved = [await _save_knowledge_file(file, target_dir) for file in files]
+    _record_document_types(target_dir, saved, document_type)
+    if any(item["indexable"] for item in saved):
+        try:
+            knowledge_bases.start_build(knowledge_base, chapter_limit=None)
+        except RuntimeError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "files": saved,
+        "knowledge_base": knowledge_base,
+        "document_type": document_type,
+        "indexing": True,
+        "message": f"已接收 {len(saved)} 份资料，正在自动分类、抽题并关联教材知识",
     }
 
 

@@ -51,11 +51,21 @@ def normalize_concept_name(value: str) -> str:
 
 def meaningful_section(section: str) -> str:
     value = normalize_concept_name(section)
-    if not value or len(value) > 60:
+    if not value or len(value) > 32:
         return ""
     if re.search(r"(?:pages?|页)[_-]?\d+[_-]\d+", value, re.I):
         return ""
     if "_" in value and not re.search(r"[\u4e00-\u9fff]", value):
+        return ""
+    if re.search(r"[,，。！？?=;；]", value):
+        return ""
+    if any(
+        marker in value
+        for marker in (
+            "如图", "见图", "题解", "例题", "已知", "试求", "请判断",
+            "设在", "通过调节", "改变", "为什么", "怎么", "多少",
+        )
+    ):
         return ""
     return value if re.search(r"[\u4e00-\u9fff]", value) else ""
 

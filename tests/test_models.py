@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 
 import httpx
@@ -9,17 +10,55 @@ from backend.app.agents.workflow import CircuitTutorEngine
 from backend.app.schemas import ChatRequest
 from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
-from backend.app.services.model_catalog import (
-    canonical_model_id,
-    chat_model_unavailable_reason,
-    choose_default_model,
-)
+from backend.app.config import settings
 
 
 def test_chat_request_defaults_to_required_local_qwen():
     request = ChatRequest(session_id="student-demo", message="测试")
-    assert request.model_provider == "ollama"
-    assert request.model == "qwen3.5:2b"
+    assert request.model_provider == "lmstudio"
+    assert request.model == "qwen/qwen3.5-9b"
+
+
+def test_lmstudio_provider_does_not_require_api_key():
+    request = ChatRequest(
+        session_id="student-demo",
+        message="测试",
+        model_provider="lmstudio",
+        model="qwen/qwen3.5-9b",
+        base_url="http://127.0.0.1:1234/v1",
+    )
+    assert request.api_key == ""
+
+
+def test_lmstudio_client_keeps_local_multimodal_images():
+    encoded = base64.b64encode(b"\x89PNG\r\n\x1a\nsmall-test-image").decode("ascii")
+    client = OpenAICompatibleClient(
+        provider="lmstudio",
+        model="qwen/qwen3.5-9b",
+        base_url="http://127.0.0.1:1234/v1",
+        allow_images=True,
+        trust_env=False,
+    )
+    messages = client._messages([{"role": "user", "content": "识别", "images": [encoded]}])
+    assert messages[0]["content"][0] == {"type": "text", "text": "识别"}
+    assert messages[0]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+    asyncio.run(client.close())
+
+
+def test_generation_timeout_only_guards_first_token():
+    assert settings.chat_first_token_timeout_seconds == 600
+
+    lmstudio = OpenAICompatibleClient(
+        provider="lmstudio",
+        model="qwen/qwen3.5-9b",
+        base_url="http://127.0.0.1:1234/v1",
+        trust_env=False,
+    )
+    ollama = OllamaClient(model="qwen3.5:4b")
+    assert lmstudio._client.timeout.read is None
+    assert ollama._client.timeout.read is None
+    asyncio.run(lmstudio.close())
+    asyncio.run(ollama.close())
 
 
 def test_custom_provider_requires_key_and_base_url():
@@ -40,35 +79,10 @@ def test_openai_compatible_client_builds_chat_completions_endpoint():
         base_url="https://api.deepseek.com/",
     )
     assert client.endpoint == "https://api.deepseek.com/chat/completions"
+    assert client._messages([
+        {"role": "user", "content": "题目", "images": ["private-image"]}
+    ]) == [{"role": "user", "content": "题目"}]
     asyncio.run(client.close())
-
-
-def test_openai_compatible_client_preserves_plain_text_messages():
-    messages = [
-        {"role": "system", "content": "You are a circuit tutor."},
-        {"role": "user", "content": "Analyze this circuit."},
-    ]
-
-    assert OpenAICompatibleClient._messages(messages) == messages
-
-
-def test_openai_compatible_client_builds_multimodal_image_url_content():
-    png_base64 = "iVBORw0KGgoAAAANSUhEUg=="
-
-    assert OpenAICompatibleClient._messages(
-        [{"role": "user", "content": "Analyze this circuit.", "images": [png_base64]}]
-    ) == [
-        {
-            "role": "user",
-            "content": [
-                {"type": "text", "text": "Analyze this circuit."},
-                {
-                    "type": "image_url",
-                    "image_url": {"url": f"data:image/png;base64,{png_base64}"},
-                },
-            ],
-        }
-    ]
 
 
 def test_openai_stream_continues_after_length_finish_reason():
@@ -118,55 +132,6 @@ def test_ollama_client_accepts_an_installed_model_selection():
     client = OllamaClient(model="qwen3.5:4b")
     assert client.model == "qwen3.5:4b"
     asyncio.run(client.close())
-
-
-def test_cloud_model_is_default_when_ollama_is_offline():
-    provider, model = choose_default_model(
-        {"ok": False, "models": [], "error": "connection refused"},
-        ollama_model="qwen3.5:2b",
-        qwen_model="qwen3-vl-plus",
-        deepseek_model="deepseek-v4-flash",
-        qwen_configured=True,
-        deepseek_configured=False,
-    )
-    assert (provider, model) == ("qwen", "qwen3-vl-plus")
-
-
-def test_running_ollama_uses_an_installed_model_when_default_is_missing():
-    provider, model = choose_default_model(
-        {"ok": True, "model_available": False, "models": ["qwen3.5:4b"]},
-        ollama_model="qwen3.5:2b",
-        qwen_model="qwen3-vl-plus",
-        deepseek_model="deepseek-v4-flash",
-        qwen_configured=True,
-        deepseek_configured=False,
-    )
-    assert (provider, model) == ("ollama", "qwen3.5:4b")
-
-
-def test_qwen_display_alias_is_canonicalized_to_exact_api_id():
-    assert canonical_model_id("qwen", "Qwen3.7-Plus") == "qwen3.7-plus"
-    assert canonical_model_id("qwen", "Qwen3.7-Max") == "qwen3.7-max"
-    assert canonical_model_id("custom", "My-Qwen-Proxy") == "My-Qwen-Proxy"
-
-
-def test_unavailable_qwen_vl_models_fall_back_to_flash():
-    assert canonical_model_id("qwen", "qwen3-vl-embedding") == "qwen3-vl-flash"
-    assert canonical_model_id("qwen", "qwen3-vl-8b-instruct") == "qwen3-vl-flash"
-    assert chat_model_unavailable_reason("qwen", "qwen3-vl-embedding") == ""
-
-
-def test_nested_provider_error_returns_readable_message():
-    response = httpx.Response(
-        404,
-        json={
-            "error": json.dumps({
-                "message": "The model Qwen3.7-Plus does not exist",
-                "code": "model_not_found",
-            })
-        },
-    )
-    assert OpenAICompatibleClient._error_detail(response) == "The model Qwen3.7-Plus does not exist"
 
 
 def test_answer_workflow_uses_request_selected_client():

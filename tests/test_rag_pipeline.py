@@ -1,14 +1,13 @@
-import json
-
-import fitz
-import numpy as np
-
 from backend.app.rag.models import PageDocument
 from backend.app.rag.pipeline import (
-    build_knowledge_base,
+    _infer_ocr_hierarchy,
+    _load_cached_pdf,
+    _write_cached_pdf,
     chunk_documents,
+    classify_document,
     clean_page_text,
-    extract_pdf,
+    extract_questions_from_documents,
+    list_source_files,
 )
 
 
@@ -38,45 +37,86 @@ def test_chunks_keep_metadata():
     assert any("PN结" in chunk.knowledge_tags for chunk in chunks)
 
 
-def test_pdf_subset_filename_preserves_original_source_pages(tmp_path):
-    path = tmp_path / "lesson_pages_101_103.pdf"
-    pdf = fitz.open()
-    for page_number in range(3):
-        page = pdf.new_page()
-        page.insert_text((40, 60), f"Common emitter amplifier technical content page {page_number + 1}. " * 4)
-    pdf.save(path)
-    pdf.close()
+def test_long_ocr_question_is_not_promoted_to_knowledge_tag():
+    docs = [
+        PageDocument(
+            text="二极管正向偏置时可以导通。",
+            source="扫描习题.pdf",
+            page=24,
+            chapter="第一章",
+            section="1.3.2 二极管电路如图所示,请判断二极管是导通还是截止",
+        )
+    ]
+    chunks = chunk_documents(docs)
+    assert "二极管" in chunks[0].knowledge_tags
+    assert not any("如图" in tag for tag in chunks[0].knowledge_tags)
 
-    documents = extract_pdf(path)
-    assert [document.source_page for document in documents] == [101, 102, 103]
-    chunks = chunk_documents(documents)
-    assert {chunk.page_start for chunk in chunks} == {101, 102, 103}
+
+def test_exam_pdf_is_classified_and_questions_keep_source_anchor(tmp_path):
+    path = tmp_path / "电路分析期末试卷.pdf"
+    documents = [
+        PageDocument(
+            text="1. 已知 $R=10\\Omega$，求支路电流。\n2. 写出节点电压方程并求解。",
+            source=path.name,
+            page=2,
+            chapter="试卷",
+            section="计算题",
+            doc_type="exam",
+        )
+    ]
+    assert classify_document(path, documents) == "exam"
+    questions = extract_questions_from_documents(documents, path.name)
+    assert len(questions) == 2
+    assert all(item["source_page"] == 2 for item in questions)
+    assert all(item["question_id"].startswith("AUTO-") for item in questions)
 
 
-def test_build_excludes_question_bank_files(tmp_path, monkeypatch):
-    resources = tmp_path / "resources"
-    output = tmp_path / "index"
-    resources.mkdir()
-    (resources / "lesson.md").write_text("# 第一章\n\nPN结与二极管课程正文。" * 8, encoding="utf-8")
-    (resources / "questions.xlsx").write_bytes(b"not parsed because question banks are isolated")
-    monkeypatch.setattr(
-        "backend.app.rag.pipeline.encode_texts",
-        lambda _path, texts, **_kwargs: np.ones((len(list(texts)), 8), dtype=np.float32),
+def test_declared_document_type_overrides_heuristics(tmp_path):
+    path = tmp_path / "资料.pdf"
+    assert classify_document(path, [], "notes") == "notes"
+
+
+def test_internal_ingestion_manifest_is_not_a_course_source(tmp_path):
+    (tmp_path / ".ingestion_manifest.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".hidden.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "教材.txt").write_text("欧姆定律", encoding="utf-8")
+    assert [path.name for path in list_source_files(tmp_path)] == ["教材.txt"]
+
+
+def test_scanned_section_number_advances_stale_chapter_heading():
+    chapter, section = _infer_ocr_hierarchy(
+        "2.1 双极型晶体管\n双极型晶体管是常用半导体器件。",
+        "电子电路基础",
+        "第一章 半导体基础知识及二极管电路",
+        "1.3 二极管电路",
     )
-    monkeypatch.setattr(
-        "backend.app.rag.pipeline.build_qdrant_indexes",
-        lambda *_args, **_kwargs: {"enabled": False},
-    )
-    monkeypatch.setattr(
-        "backend.app.rag.pipeline.sync_neo4j_graph",
-        lambda *_args, **_kwargs: {"enabled": False},
-    )
+    assert chapter == "第二章"
+    assert section == "2.1 双极型晶体管"
 
-    metadata = build_knowledge_base(resources, output, tmp_path / "model")
-    chunks = [json.loads(line) for line in (output / "chunks.jsonl").read_text(encoding="utf-8").splitlines()]
-    assert metadata["questions"] == 0
-    assert metadata["sources"] == ["lesson.md"]
-    assert metadata["excluded_sources"][0]["source"] == "questions.xlsx"
-    assert all(chunk["doc_type"] != "question" for chunk in chunks)
-    assert metadata["validation"]["question_chunks"] == 0
 
+def test_scanned_chapter_reference_sentence_is_not_a_heading():
+    chapter, _ = _infer_ocr_hierarchy(
+        "第二章中我们已经知道,晶体管可以看成双端口网络。",
+        "电子电路基础",
+        "第三章 放大电路",
+        "3.1 小信号模型",
+    )
+    assert chapter == "第三章 放大电路"
+
+
+def test_pdf_extraction_cache_round_trip(tmp_path):
+    cache_path = tmp_path / "extract.json"
+    document = PageDocument(
+        text="PN结具有单向导电性。",
+        source="扫描教材.pdf",
+        page=12,
+        chapter="第一章",
+        section="1.2 PN结",
+    )
+    _write_cached_pdf(cache_path, [document], "macos-vision-ocr", ["扫描版"])
+    cached = _load_cached_pdf(cache_path)
+    assert cached is not None
+    documents, parser, warnings = cached
+    assert documents == [document]
+    assert parser == "macos-vision-ocr"
+    assert warnings == ["扫描版"]

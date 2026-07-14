@@ -91,7 +91,11 @@ class KnowledgeBaseManager:
                     "id": knowledge_base,
                     "state": "ready",
                     "documents": meta.get("documents", 0),
+                    "indexed_documents": meta.get("indexed_documents", meta.get("documents", 0)),
+                    "failed_documents": meta.get("failed_documents", 0),
                     "chunks": meta.get("chunks", 0),
+                    "questions": meta.get("questions", 0),
+                    "relations": meta.get("relations", 0),
                     "circuits": meta.get("circuit_diagrams", 0),
                     "layout_elements": meta.get("layout_elements", 0),
                     "schema_version": meta.get("schema_version", "1.0"),
@@ -102,6 +106,11 @@ class KnowledgeBaseManager:
                     "progress": 100,
                     "stage": "ready",
                     "cancellable": False,
+                    "source_warnings": [
+                        {"source": item.get("source", ""), "warnings": item.get("warnings", [])}
+                        for item in meta.get("source_manifest", [])
+                        if item.get("warnings")
+                    ],
                 }
             except Exception as exc:
                 logger.exception("Failed to load knowledge base %s", knowledge_base)
@@ -444,7 +453,11 @@ class KnowledgeBaseManager:
                 "id": knowledge_base,
                 "state": "ready",
                 "documents": meta.get("documents", 0),
+                "indexed_documents": meta.get("indexed_documents", meta.get("documents", 0)),
+                "failed_documents": meta.get("failed_documents", 0),
                 "chunks": meta.get("chunks", 0),
+                "questions": meta.get("questions", 0),
+                "relations": meta.get("relations", 0),
                 "circuits": meta.get("circuit_diagrams", 0),
                 "layout_elements": meta.get("layout_elements", 0),
                 "schema_version": meta.get("schema_version", "2.0-multimodal"),
@@ -458,6 +471,11 @@ class KnowledgeBaseManager:
                 "started_at": self._states.get(knowledge_base, {}).get("started_at"),
                 "updated_at": completed_at,
                 "completed_at": completed_at,
+                "source_warnings": [
+                    {"source": item.get("source", ""), "warnings": item.get("warnings", [])}
+                    for item in meta.get("source_manifest", [])
+                    if item.get("warnings")
+                ],
             }
         except KnowledgeBaseBuildCancelled:
             logger.info("Knowledge base build cancelled: %s", knowledge_base)
@@ -554,4 +572,3 @@ class KnowledgeBaseManager:
 def read_index_meta(index_dir: Path) -> dict[str, Any]:
     path = index_dir / "index_meta.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-

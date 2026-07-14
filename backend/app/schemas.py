@@ -11,10 +11,15 @@ class ChatRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=96)
     message: str = Field(default="", max_length=8000)
     mode: Literal["auto", "answer", "quiz", "plan"] = "auto"
+    tutor_action: Literal[
+        "auto", "understand", "method", "hint", "check_step", "explain_error", "full_solution"
+    ] = "auto"
+    hint_level: int = Field(default=1, ge=1, le=5)
+    tutoring_mode: Literal["guided", "full"] = "guided"
     knowledge_base: str = Field(default="default", min_length=1, max_length=48)
     attachment_ids: list[str] = Field(default_factory=list, max_length=5)
-    model_provider: Literal["ollama", "deepseek", "qwen", "custom"] = "ollama"
-    model: str = Field(default="qwen3.5:2b", min_length=1, max_length=128)
+    model_provider: Literal["ollama", "lmstudio", "deepseek", "qwen", "custom"] = "lmstudio"
+    model: str = Field(default="qwen/qwen3.5-9b", min_length=1, max_length=128)
     api_key: str = Field(default="", max_length=512)
     base_url: str = Field(default="", max_length=512)
 
@@ -70,13 +75,35 @@ class SourceInfo(BaseModel):
     doc_type: str = "textbook"
 
 
+class KBStatus(BaseModel):
+    id: str
+    state: Literal["ready", "building", "cancelling", "cancelled", "error", "missing"]
+    documents: int = 0
+    indexed_documents: int = 0
+    failed_documents: int = 0
+    chunks: int = 0
+    questions: int = 0
+    relations: int = 0
+    message: str = ""
+    source_warnings: list[dict[str, object]] = Field(default_factory=list)
+    available: bool = False
+    progress: int = 0
+    stage: str = ""
+    cancellable: bool = False
+    circuits: int = 0
+    layout_elements: int = 0
+    schema_version: str = ""
+    pipeline_layers: dict[str, object] = Field(default_factory=dict)
+    validation: dict[str, object] = Field(default_factory=dict)
+
+
 class MistakeCreateRequest(BaseModel):
     student_id: str = Field(min_length=1, max_length=96)
     session_id: str = Field(min_length=1, max_length=96)
     content: str = Field(min_length=1, max_length=16000)
     agent: str = Field(default="学习 Agent", max_length=64)
-    model_provider: Literal["ollama", "deepseek", "qwen", "custom"] = "ollama"
-    model: str = Field(default="qwen3.5:2b", min_length=1, max_length=128)
+    model_provider: Literal["ollama", "lmstudio", "deepseek", "qwen", "custom"] = "lmstudio"
+    model: str = Field(default="qwen/qwen3.5-9b", min_length=1, max_length=128)
     api_key: str = Field(default="", max_length=512)
     base_url: str = Field(default="", max_length=512)
 
@@ -104,18 +131,10 @@ class MistakeCreateRequest(BaseModel):
         return self
 
 
-class KBStatus(BaseModel):
-    id: str
-    state: Literal["ready", "building", "error", "missing"]
-    documents: int = 0
-    chunks: int = 0
-    message: str = ""
-
-
 class KnowledgeBaseRebuildRequest(BaseModel):
     knowledge_base: str = Field(default="default", min_length=1, max_length=48)
-    model_provider: Literal["ollama", "deepseek", "qwen", "custom"] = "deepseek"
-    model: str = Field(min_length=1, max_length=128)
+    model_provider: Literal["ollama", "lmstudio", "deepseek", "qwen", "custom"] = "lmstudio"
+    model: str = Field(default="qwen/qwen3.5-9b", min_length=1, max_length=128)
     api_key: str = Field(default="", max_length=512)
     base_url: str = Field(default="", max_length=512)
     chapter_limit: int | None = Field(default=None, ge=1)
@@ -142,3 +161,42 @@ class KnowledgeBaseRebuildRequest(BaseModel):
         if self.model_provider == "custom" and (not self.api_key or not self.base_url):
             raise ValueError("自定义 API 必须填写 API Key 和 Base URL")
         return self
+
+
+class WrongQuestionMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=16000)
+    agent: str = Field(default="", max_length=120)
+    model: str = Field(default="", max_length=128)
+    created_at: str = Field(default="", max_length=80)
+
+
+class WrongQuestionCreate(BaseModel):
+    session_id: str = Field(min_length=1, max_length=96)
+    title: str = Field(default="", max_length=120)
+    category_id: str = Field(default="uncategorized", min_length=1, max_length=64)
+    knowledge_base: str = Field(default="default", min_length=1, max_length=48)
+    messages: list[WrongQuestionMessage] = Field(min_length=1, max_length=30)
+
+    @field_validator("session_id", "knowledge_base")
+    @classmethod
+    def safe_wrong_question_identifier(cls, value: str) -> str:
+        value = value.strip()
+        if not all(char.isalnum() or char in "-_" for char in value):
+            raise ValueError("仅允许字母、数字、连字符和下划线")
+        return value
+
+
+class WrongQuestionUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=120)
+    category_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @model_validator(mode="after")
+    def require_change(self) -> "WrongQuestionUpdate":
+        if self.title is None and self.category_id is None:
+            raise ValueError("至少需要修改一个字段")
+        return self
+
+
+class WrongQuestionCategoryCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=40)

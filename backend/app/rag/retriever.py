@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import base64
+from collections import Counter
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -19,6 +20,23 @@ from backend.app.rag.models import RetrievalHit, TextChunk
 from backend.app.rag.embedding_runtime import encode_texts
 from backend.app.config import settings
 from backend.app.services.qwen_multimodal_client import QwenMultimodalEmbeddingClient
+
+
+DOMAIN_ANCHORS = (
+    "PN结", "稳压二极管", "二极管", "晶体管", "三极管", "场效应管", "运算放大器",
+    "节点电压法", "回路电流法", "网孔电流法", "戴维南", "诺顿", "叠加定理",
+    "RC电路", "RL电路", "RLC", "相量", "功率因数", "传递函数", "频率响应",
+)
+
+
+def _query_anchors(query: str) -> tuple[str, ...]:
+    lowered = query.lower()
+    selected = [anchor for anchor in DOMAIN_ANCHORS if anchor.lower() in lowered]
+    return tuple(
+        anchor
+        for anchor in selected
+        if not any(anchor.lower() in other.lower() for other in selected if other != anchor)
+    )
 
 
 def tokenize(text: str) -> list[str]:
@@ -52,6 +70,65 @@ class HybridRetriever:
         self._qwen_multimodal_lock = threading.Lock()
         self._qwen_multimodal_client = self._open_qwen_multimodal()
         self._graph_chunks = self._load_graph_expansion()
+        self.question_chunks = self._load_question_chunks(index_dir / "question_bank.json")
+        self._question_tokenized = [
+            tokenize(self._search_text(chunk)) for chunk in self.question_chunks
+        ]
+        self._question_bm25 = (
+            BM25Okapi(self._question_tokenized) if self._question_tokenized else None
+        )
+        self._question_embeddings: np.ndarray | None = None
+        self._question_embedding_lock = threading.Lock()
+
+    @staticmethod
+    def _load_question_chunks(path: Path) -> list[TextChunk]:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+        except (OSError, json.JSONDecodeError):
+            return []
+        chunks: list[TextChunk] = []
+        for item in payload.get("questions", []):
+            if not isinstance(item, dict) or not str(item.get("question_text", "")).strip():
+                continue
+            tags = [
+                str(value).strip()
+                for value in item.get("knowledge_tags", [])
+                if str(value).strip()
+            ]
+            question_id = str(item.get("question_id") or len(chunks) + 1)
+            chunks.append(
+                TextChunk(
+                    id=f"question-{question_id}",
+                    text=(
+                        f"题目：{item.get('question_text', '')}\n"
+                        f"标准答案：{item.get('standard_answer', '')}\n"
+                        f"解题步骤：{item.get('solution_steps', '')}\n"
+                        f"易错点：{item.get('common_mistakes', '')}"
+                    ).strip(),
+                    source=str(item.get("source", "question_bank.json")),
+                    chapter="示例题库",
+                    section="、".join(tags) or str(item.get("question_type", "综合题")),
+                    page_start=item.get("source_page"),
+                    page_end=item.get("source_page"),
+                    doc_type="question",
+                    knowledge_tags=tags,
+                )
+            )
+        return chunks
+
+    def _get_question_embeddings(self) -> np.ndarray:
+        if self._question_embeddings is None:
+            with self._question_embedding_lock:
+                if self._question_embeddings is None:
+                    if not self.question_chunks:
+                        dimension = int(self.meta.get("dimension", 384))
+                        self._question_embeddings = np.empty((0, dimension), dtype=np.float32)
+                    else:
+                        self._question_embeddings = encode_texts(
+                            self.embedding_model_path,
+                            [self._search_text(chunk) for chunk in self.question_chunks],
+                        )
+        return self._question_embeddings
 
     def _open_qdrant(self) -> Any | None:
         qdrant_meta = self.meta.get("qdrant", {})
@@ -351,6 +428,78 @@ class HybridRetriever:
             return {key: 1.0 if maximum > 0 else 0.0 for key in values}
         return {key: (value - minimum) / (maximum - minimum) for key, value in values.items()}
 
+    @staticmethod
+    def _diversify_sources(hits: list[RetrievalHit], k: int) -> list[RetrievalHit]:
+        if len(hits) <= 1 or k <= 1:
+            return hits[:k]
+        selected = [hits[0]]
+        used_ids = {hits[0].chunk.id}
+        first_source = hits[0].chunk.source
+        threshold = max(0.18, hits[0].score * 0.42)
+        best_by_source: dict[str, RetrievalHit] = {}
+        for hit in hits[1:]:
+            if hit.chunk.source == first_source or hit.score < threshold:
+                continue
+            best_by_source.setdefault(hit.chunk.source, hit)
+        for hit in sorted(best_by_source.values(), key=lambda item: item.score, reverse=True)[:2]:
+            if len(selected) >= k:
+                break
+            selected.append(hit)
+            used_ids.add(hit.chunk.id)
+        source_counts = Counter(hit.chunk.source for hit in selected)
+        for hit in hits:
+            if len(selected) >= k:
+                break
+            if hit.score < threshold or hit.chunk.id in used_ids:
+                continue
+            if source_counts[hit.chunk.source] >= 3 and best_by_source:
+                continue
+            selected.append(hit)
+            used_ids.add(hit.chunk.id)
+            source_counts[hit.chunk.source] += 1
+        return selected[:k]
+
+    def search_questions(self, query: str, k: int = 3) -> list[RetrievalHit]:
+        """Search the isolated question bank only for the quiz-generation route."""
+        if not self.question_chunks or self._question_bm25 is None or k <= 0:
+            return []
+        query_embedding = encode_texts(self.embedding_model_path, [query], batch_size=1)
+        vector_values = self._get_question_embeddings() @ query_embedding[0]
+        bm25_values = self._question_bm25.get_scores(tokenize(query))
+        vector_norm = self._normalize(
+            {index: float(value) for index, value in enumerate(vector_values)}
+        )
+        bm25_norm = self._normalize(
+            {index: float(value) for index, value in enumerate(bm25_values)}
+        )
+        query_tokens = set(tokenize(query))
+        hits: list[RetrievalHit] = []
+        for index, chunk in enumerate(self.question_chunks):
+            chunk_tokens = set(self._question_tokenized[index])
+            tag_tokens = set(tokenize(" ".join(chunk.knowledge_tags)))
+            overlap = len(query_tokens & chunk_tokens) / max(1, len(query_tokens))
+            tag_overlap = len(query_tokens & tag_tokens) / max(1, len(query_tokens))
+            if bm25_values[index] <= 0 and tag_overlap <= 0:
+                continue
+            score = min(
+                1.0,
+                0.35 * vector_norm.get(index, 0.0)
+                + 0.40 * bm25_norm.get(index, 0.0)
+                + 0.15 * overlap
+                + 0.10 * tag_overlap,
+            )
+            hits.append(
+                RetrievalHit(
+                    chunk=chunk,
+                    score=score,
+                    vector_score=float(vector_values[index]),
+                    bm25_score=float(bm25_values[index]),
+                    rerank_score=score,
+                )
+            )
+        hits.sort(key=lambda hit: hit.score, reverse=True)
+        return hits[:k]
+
     def search(
         self,
         query: str,
@@ -391,10 +540,16 @@ class HybridRetriever:
             set(vector_map) | set(bm25_map) | set(graph_map) | set(image_map)
         ) & searchable
         query_tokens = set(tokenize(query))
+        query_anchors = _query_anchors(query)
         cross_map = self._cross_encoder_scores(query, list(candidates))
         hits: list[RetrievalHit] = []
         for index in candidates:
             chunk = self.chunks[index]
+            searchable_text = self._search_text(chunk).lower()
+            if query_anchors and not any(
+                anchor.lower() in searchable_text for anchor in query_anchors
+            ):
+                continue
             chunk_tokens = set(self._tokenized[index])
             overlap = len(query_tokens & chunk_tokens) / max(1, len(query_tokens))
             tag_overlap = len(query_tokens & set(tokenize(" ".join(chunk.knowledge_tags)))) / max(1, len(query_tokens))
@@ -420,4 +575,7 @@ class HybridRetriever:
                 )
             )
         hits.sort(key=lambda hit: hit.rerank_score, reverse=True)
-        return hits[:k]
+        # Question-bank chunks are intentionally never mixed into ordinary RAG,
+        # even when legacy callers pass prefer_questions=True. Quiz generation
+        # must call search_questions() explicitly.
+        return self._diversify_sources(hits, k)
