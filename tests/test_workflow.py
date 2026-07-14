@@ -311,6 +311,36 @@ def test_noise_handler_does_not_call_solver_or_retrieval():
     assert "".join(streamed) == result["response"]
 
 
+def test_standalone_concept_qa_uses_grounded_course_retrieval():
+    engine = object.__new__(CircuitTutorEngine)
+    captured = {}
+
+    async def retrieve(_state, analysis, *, limit):
+        captured["analysis"] = analysis
+        captured["limit"] = limit
+        return []
+
+    class LLM:
+        supports_images = False
+
+        async def stream_chat(self, _messages, **_kwargs):
+            yield "PN结的势垒决定其单向导电性。"
+
+    engine._retrieve_grounded_hits = retrieve
+    result = asyncio.run(engine._run_qa_agent({
+        "message": "PN结为什么具有单向导电性？",
+        "history": [],
+        "problem_session": {},
+        "llm": LLM(),
+        "attachment_context": "",
+    }))
+
+    assert captured["analysis"]["knowledge_points"] == ["pn结"]
+    assert captured["analysis"]["information_complete"] is True
+    assert captured["limit"] == 5
+    assert result["agent"] == "答疑 Agent"
+
+
 def test_context_window_keeps_latest_long_answer_and_more_than_six_messages():
     history = [
         {"role": "user" if index % 2 == 0 else "assistant", "content": f"第{index}条"}

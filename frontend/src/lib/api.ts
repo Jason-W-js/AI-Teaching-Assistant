@@ -156,6 +156,8 @@ type SSECallbacks = {
   onError: (message: string) => void
 }
 
+const FIRST_TOKEN_TIMEOUT_MS = 600_000
+
 function parseEvent(block: string) {
   let event = 'message'
   const dataLines: string[] = []
@@ -197,15 +199,23 @@ export async function streamChat(
   }
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
-  const readWithIdleTimeout = async () => {
+  const firstTokenDeadline = Date.now() + FIRST_TOKEN_TIMEOUT_MS
+  let receivedFirstToken = false
+  const readNext = async () => {
+    if (receivedFirstToken) return reader.read()
+    const remaining = firstTokenDeadline - Date.now()
+    if (remaining <= 0) {
+      await reader.cancel().catch(() => undefined)
+      throw new Error('本地模型在 600 秒内未输出第一个 token，请确认模型服务正常后重试')
+    }
     let timeoutId: ReturnType<typeof setTimeout> | undefined
     try {
       return await Promise.race([
         reader.read(),
         new Promise<never>((_, reject) => {
           timeoutId = setTimeout(
-            () => reject(new Error('模型连接长时间没有任何进度，请重新生成')),
-            75_000,
+            () => reject(new Error('本地模型在 600 秒内未输出第一个 token，请确认模型服务正常后重试')),
+            remaining,
           )
         }),
       ])
@@ -223,7 +233,11 @@ export async function streamChat(
     const { event, data } = parseEvent(block)
     if (event === 'status') callbacks.onStatus(data)
     if (event === 'meta') callbacks.onMeta(data)
-    if (event === 'delta') callbacks.onDelta(data.content || '')
+    if (event === 'delta') {
+      const content = data.content || ''
+      if (content) receivedFirstToken = true
+      callbacks.onDelta(content)
+    }
     if (event === 'done') {
       receivedTerminalEvent = true
       callbacks.onDone()
@@ -234,7 +248,7 @@ export async function streamChat(
     }
   }
   while (true) {
-    const { done, value } = await readWithIdleTimeout()
+    const { done, value } = await readNext()
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done })
     const blocks = buffer.split(/\r?\n\r?\n/)
     buffer = blocks.pop() || ''

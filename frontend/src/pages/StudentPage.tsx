@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import {
   App as AntApp,
@@ -66,7 +66,13 @@ import {
   uploadKnowledgeFiles,
 } from '../lib/api'
 import { useChatStore } from '../store/chatStore'
-import { KnowledgeGraphView, WrongNotebookView } from './LearningViews'
+
+const KnowledgeGraphView = lazy(() =>
+  import('./LearningViews').then((module) => ({ default: module.KnowledgeGraphView })),
+)
+const WrongNotebookView = lazy(() =>
+  import('./LearningViews').then((module) => ({ default: module.WrongNotebookView })),
+)
 
 const { TextArea } = Input
 type WorkspaceView = 'chat' | 'graph' | 'wrongbook'
@@ -1106,14 +1112,18 @@ function StudentPageContent() {
             </div>
             <KnowledgePanel statuses={statuses} onCreate={() => setKbModalOpen(true)} />
           </section>
-        ) : activeView === 'graph' ? (
-          <KnowledgeGraphView
-            knowledgeBase={knowledgeBase}
-            refreshKey={learningDataVersion}
-            onOpenWrongBook={() => setActiveView('wrongbook')}
-          />
         ) : (
-          <WrongNotebookView refreshKey={learningDataVersion} />
+          <Suspense fallback={<div className="workspace-loading">正在加载学习空间…</div>}>
+            {activeView === 'graph' ? (
+              <KnowledgeGraphView
+                knowledgeBase={knowledgeBase}
+                refreshKey={learningDataVersion}
+                onOpenWrongBook={() => setActiveView('wrongbook')}
+              />
+            ) : (
+              <WrongNotebookView refreshKey={learningDataVersion} />
+            )}
+          </Suspense>
         )}
       </main>
 

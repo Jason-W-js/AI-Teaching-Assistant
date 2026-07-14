@@ -113,6 +113,8 @@ cd frontend
 npm run build
 ```
 
+`vite.config.ts` 是唯一的 Vite 配置源。编译产物和 `*.tsbuildinfo` 不应提交；生产构建会将学生端、教师端、学习空间与第三方依赖拆分为可缓存资源。
+
 提交前还应执行：
 
 ```bash

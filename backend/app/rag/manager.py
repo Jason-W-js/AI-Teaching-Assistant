@@ -24,6 +24,8 @@ from backend.app.rag.stores import delete_qdrant_indexes, sync_neo4j_graph
 
 logger = logging.getLogger(__name__)
 
+REQUIRED_INDEX_ARTIFACTS = ("chunks.jsonl", "index_meta.json", "vectors.faiss")
+
 
 class KnowledgeBaseManager:
     def __init__(self) -> None:
@@ -71,6 +73,26 @@ class KnowledgeBaseManager:
     def index_dir(self, knowledge_base: str) -> Path:
         return settings.vector_stores_dir / self.validate_id(knowledge_base)
 
+    @staticmethod
+    def _missing_index_artifacts(index_dir: Path) -> tuple[str, ...]:
+        """Return the required artifacts that are absent from a persisted index.
+
+        Runtime folders may survive an interrupted build or a branch switch.  A
+        directory alone is therefore not evidence that a knowledge base can be
+        opened safely.
+        """
+        return tuple(
+            name
+            for name in REQUIRED_INDEX_ARTIFACTS
+            if not (index_dir / name).is_file()
+        )
+
+    def _resource_count(self, knowledge_base: str) -> int:
+        resource_dir = self.resource_dir(knowledge_base)
+        if not resource_dir.exists():
+            return 0
+        return sum(path.is_file() for path in resource_dir.iterdir())
+
     def load_existing(self) -> None:
         settings.vector_stores_dir.mkdir(parents=True, exist_ok=True)
         for index_dir in settings.vector_stores_dir.iterdir():
@@ -82,6 +104,29 @@ class KnowledgeBaseManager:
                     shutil.rmtree(index_dir, ignore_errors=True)
                 continue
             knowledge_base = index_dir.name
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,48}", knowledge_base):
+                logger.warning("Ignoring invalid knowledge-base directory %s", knowledge_base)
+                continue
+            missing_artifacts = self._missing_index_artifacts(index_dir)
+            if missing_artifacts:
+                missing_names = "、".join(missing_artifacts)
+                logger.warning(
+                    "Skipping incomplete knowledge base %s; missing %s",
+                    knowledge_base,
+                    ", ".join(missing_artifacts),
+                )
+                self._states[knowledge_base] = {
+                    "id": knowledge_base,
+                    "state": "missing",
+                    "documents": self._resource_count(knowledge_base),
+                    "chunks": 0,
+                    "message": f"索引不完整，请重新构建（缺少：{missing_names}）",
+                    "available": False,
+                    "progress": 0,
+                    "stage": "incomplete",
+                    "cancellable": False,
+                }
+                continue
             try:
                 self._retrievers[knowledge_base] = HybridRetriever(
                     index_dir, settings.embedding_model_path
@@ -113,13 +158,17 @@ class KnowledgeBaseManager:
                     ],
                 }
             except Exception as exc:
-                logger.exception("Failed to load knowledge base %s", knowledge_base)
+                logger.warning(
+                    "Knowledge base %s failed integrity loading: %s",
+                    knowledge_base,
+                    exc,
+                )
                 self._states[knowledge_base] = {
                     "id": knowledge_base,
                     "state": "error",
-                    "documents": 0,
+                    "documents": self._resource_count(knowledge_base),
                     "chunks": 0,
-                    "message": str(exc),
+                    "message": "索引文件无法读取，请重新构建知识库",
                     "available": False,
                     "progress": 0,
                     "stage": "error",

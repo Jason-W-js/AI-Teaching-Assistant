@@ -389,6 +389,52 @@ def test_load_existing_keeps_default_when_source_files_remain(tmp_path, monkeypa
     }]
 
 
+def test_load_existing_marks_partial_index_for_rebuild_without_opening_it(
+    tmp_path, monkeypatch
+):
+    resources_root = tmp_path / "resources"
+    indexes_root = tmp_path / "indexes"
+    partial_index = indexes_root / "default"
+    resources_root.mkdir(parents=True)
+    partial_index.mkdir(parents=True)
+    (resources_root / "lesson.pdf").write_text("lesson", encoding="utf-8")
+    (partial_index / "source_manifest.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(manager_module, "settings", replace(
+        manager_module.settings,
+        resources_dir=resources_root,
+        vector_stores_dir=indexes_root,
+    ))
+
+    manager = KnowledgeBaseManager()
+    manager.load_existing()
+
+    status = manager.statuses()[0]
+    assert status["id"] == "default"
+    assert status["state"] == "missing"
+    assert status["stage"] == "incomplete"
+    assert status["documents"] == 1
+    assert status["available"] is False
+    assert "chunks.jsonl" in status["message"]
+    assert "vectors.faiss" in status["message"]
+
+
+def test_load_existing_ignores_invalid_runtime_directory_names(tmp_path, monkeypatch):
+    resources_root = tmp_path / "resources"
+    indexes_root = tmp_path / "indexes"
+    resources_root.mkdir(parents=True)
+    (indexes_root / "invalid folder").mkdir(parents=True)
+    monkeypatch.setattr(manager_module, "settings", replace(
+        manager_module.settings,
+        resources_dir=resources_root,
+        vector_stores_dir=indexes_root,
+    ))
+
+    manager = KnowledgeBaseManager()
+    manager.load_existing()
+
+    assert manager.statuses() == []
+
+
 def test_inline_formula_regions_remain_text_evidence_only():
     regions = [
         DetectedRegion("inline", [0, 0, 20, 10], 0.9, "pdf-extract-kit:formula"),

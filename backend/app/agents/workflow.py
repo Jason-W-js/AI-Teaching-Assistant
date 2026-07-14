@@ -1108,7 +1108,12 @@ class CircuitTutorEngine:
         return [
             hit
             for hit in hits
-            if hit.score >= 0.58
+            # Hybrid scores combine several optional signals; without a local
+            # cross-encoder or graph service, even exact textbook matches
+            # normally peak around 0.35-0.50.  The explicit term-evidence gate
+            # below provides the semantic precision that a fixed 0.58 cutoff
+            # previously achieved only by discarding every useful hit.
+            if hit.score >= 0.30
             and any(
                 term
                 in f"{' '.join(hit.chunk.knowledge_tags)} {hit.chunk.section} {hit.chunk.text}".casefold()
@@ -1118,14 +1123,56 @@ class CircuitTutorEngine:
 
     async def _run_qa_agent(self, state: AgentState) -> AgentState:
         """Fast context-aware Q&A path that does not invoke the solve pipeline."""
-        await _emit(state, "qa", "正在结合当前题目与最近对话直接解释", "答疑 Agent")
         problem_session = state.get("problem_session", {})
         analysis = problem_session.get("problem_analysis", {})
+        message = state.get("message", "")
         asks_for_sources = any(
-            marker in state.get("message", "")
+            marker in message
             for marker in ("出处", "教材", "知识库", "参考资料", "检索依据", "哪一章", "哪一页")
         )
-        hits = await self._retrieve_grounded_hits(state, analysis, limit=5) if asks_for_sources else []
+        standalone_concept = (
+            not analysis
+            and not _is_contextual_followup(message)
+            and _has_circuit_signal(message)
+        )
+        retrieval_analysis = analysis
+        if standalone_concept:
+            normalized = re.sub(r"\s+", "", message).casefold()
+            matched_points = [
+                word
+                for word in CIRCUIT_DOMAIN_WORDS
+                if word.casefold() in normalized
+            ]
+            matched_points = [
+                point
+                for point in matched_points
+                if not any(
+                    point.casefold() in other.casefold()
+                    for other in matched_points
+                    if point != other
+                )
+            ]
+            retrieval_analysis = {
+                "problem_type": "课程知识点答疑",
+                "problem_text": message,
+                "knowledge_points": matched_points,
+                "information_complete": True,
+                "confidence": 0.9,
+            }
+        should_retrieve = asks_for_sources or standalone_concept
+        await _emit(
+            state,
+            "qa",
+            "正在检索课程资料并结合上下文解释"
+            if should_retrieve
+            else "正在结合当前题目与最近对话直接解释",
+            "答疑 Agent",
+        )
+        hits = (
+            await self._retrieve_grounded_hits(state, retrieval_analysis, limit=5)
+            if should_retrieve
+            else []
+        )
         compact_reference = problem_session.get("reference_solution", {})
         compact_problem = {
             "problem_analysis": analysis,

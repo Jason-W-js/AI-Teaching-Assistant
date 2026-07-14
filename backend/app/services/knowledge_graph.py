@@ -11,10 +11,10 @@ from backend.app.services.validated_knowledge import VALIDATED_KNOWLEDGE_CARDS
 
 
 CATEGORY_RULES: tuple[tuple[str, str, tuple[str, ...]], ...] = (
-    ("基础电路分析", "基础电路分析", ("基尔霍夫", "kcl", "kvl", "节点", "回路", "戴维南", "诺顿", "叠加", "网络定理", "欧姆定律", "电阻")),
-    ("半导体与器件", "半导体与器件", ("半导体", "pn结", "二极管", "稳压管", "晶体管", "场效应管", "载流子", "空穴", "热激发", "本征", "n型", "p型")),
-    ("模拟电子电路", "模拟电子电路", ("放大", "运算放大器", "运放", "负反馈", "差分", "互补", "静态工作点", "频率特性", "比较器", "振荡电路", "波形", "运算电路", "乘法器", "转换电路", "锁相环", "有源滤波", "自动增益")),
-    ("动态与频域电路", "动态与频域电路", ("rc", "rl", "rlc", "一阶电路", "二阶电路", "三要素", "时间常数", "暂态", "相量", "相位差", "正弦稳态", "频率响应", "传递函数", "谐振", "功率因数")),
+    ("基础电路分析", "基础电路分析", ("基尔霍夫", "kcl", "kvl", "节点", "回路", "戴维南", "诺顿", "叠加", "网络定理", "二端口", "端口网络", "欧姆定律", "电阻")),
+    ("半导体与器件", "半导体与器件", ("半导体", "pn结", "二极管", "稳压管", "晶体管", "场效应管", "载流子", "少数载流子", "空穴", "热激发", "本征", "n型", "p型", "正向偏置", "反向偏置", "正向导通", "反向截止", "扩散电流", "漂移电流", "耗尽层", "势垒")),
+    ("模拟电子电路", "模拟电子电路", ("放大", "运算放大器", "运放", "反馈", "共模", "差模", "互补", "静态工作点", "大信号动态", "频率特性", "比较器", "振荡电路", "波形", "运算电路", "乘法器", "转换电路", "锁相环", "有源滤波", "有源负载", "电流源电路", "自动增益")),
+    ("动态与频域电路", "动态与频域电路", ("rc", "rl", "rlc", "一阶电路", "二阶电路", "三要素", "时间常数", "暂态", "相量", "相位差", "正弦稳态", "频率响应", "传递函数", "谐振", "功率因数", "低通", "高通", "带通", "带阻", "滤波器")),
     ("数字电路", "数字电路", ("逻辑", "触发器", "计数器", "寄存器", "编码器", "译码器", "状态机", "verilog")),
     ("工具与仿真", "工具与仿真", ("ewb", "eda", "电路仿真", "仿真分析", "仪器", "元器件模型库")),
     ("电源与能量变换", "电源与能量变换", ("整流", "滤波", "稳压", "直流电源", "功率电子", "逆变")),
@@ -24,6 +24,7 @@ CATEGORY_ORDER = {
     category_id: index for index, (category_id, _, _) in enumerate(CATEGORY_RULES)
 }
 OTHER_CATEGORY_ID = "其他知识"
+_GENERIC_CATEGORY_MARKERS = {"电阻", "节点", "回路", "波形", "滤波"}
 
 _FIGURE_OR_LAYOUT_NOISE = re.compile(
     r"(?:如图|见图|图中|下图|上图|图\s*[A-Za-z]?\d|"
@@ -133,6 +134,10 @@ class KnowledgeGraphService:
             return ""
         point = re.sub(r"^[\s.、第\d．]+", "", raw).strip(" 。：:;；")
         point = re.sub(r"^[一二三四五六七八九十]+[、.．]\s*", "", point).strip()
+        if point.startswith(("（已压缩）", "(已压缩)")) or re.search(
+            r"(?:\.pdf|\.docx?|\.pptx?|目录|参考文献|内容回顾)$", point, re.I
+        ):
+            return ""
         if point in {"概述", "绪论", "基本电路", "基本分析方法"}:
             return ""
         if (
@@ -172,14 +177,72 @@ class KnowledgeGraphService:
     @staticmethod
     def _category(label: str, context: str = "") -> tuple[str, str]:
         label_text = label.casefold()
-        for category_id, category_label, markers in CATEGORY_RULES:
-            if any(marker.casefold() in label_text for marker in markers):
-                return category_id, category_label
         context_text = context.casefold()
+        scores: dict[str, tuple[int, str]] = {}
         for category_id, category_label, markers in CATEGORY_RULES:
-            if any(marker.casefold() in context_text for marker in markers):
-                return category_id, category_label
+            score = 0
+            for marker in markers:
+                normalized = marker.casefold()
+                if normalized in label_text:
+                    if marker in _GENERIC_CATEGORY_MARKERS:
+                        score += 20 + len(normalized)
+                    else:
+                        score += 100 + 10 * len(normalized)
+                    if label_text.startswith(normalized):
+                        score += 45
+                elif normalized in context_text:
+                    score += 5 + len(normalized)
+            if score:
+                scores[category_id] = (score, category_label)
+        if scores:
+            category_id, (_, category_label) = max(
+                scores.items(),
+                key=lambda item: (
+                    item[1][0],
+                    -CATEGORY_ORDER.get(item[0], len(CATEGORY_ORDER)),
+                ),
+            )
+            return category_id, category_label
         return "其他知识", "其他知识"
+
+    @staticmethod
+    def _section_relevance(label: str, chunk: dict[str, Any]) -> int:
+        """Score whether a section is a primary source for a knowledge point.
+
+        A generated knowledge tag can describe an incidental application in a
+        chunk.  Such a mention remains useful evidence, but it must not be shown
+        as the concept's defining chapter in the student graph.
+        """
+        label_text = re.sub(r"\s+", "", label).casefold()
+        if not label_text:
+            return 0
+        section = re.sub(r"\s+", "", str(chunk.get("section", ""))).casefold()
+        chapter = re.sub(r"\s+", "", str(chunk.get("chapter", ""))).casefold()
+        text = re.sub(r"\s+", "", str(chunk.get("text", ""))).casefold()
+        if label_text in section:
+            return 100
+        if label_text in chapter:
+            return 85
+        position = text.find(label_text)
+        if position < 0:
+            return 0
+        before = text[max(0, position - 24) : position]
+        after = text[position + len(label_text) : position + len(label_text) + 36]
+        definition_markers = (
+            "是指",
+            "定义为",
+            "称为",
+            "叫作",
+            "叫做",
+            "表述为",
+            "内容为",
+            "适用于",
+        )
+        if any(after.startswith(marker) for marker in definition_markers) or any(
+            before.endswith(marker) for marker in ("称为", "叫作", "叫做")
+        ):
+            return 65
+        return 15
 
     @staticmethod
     def _category_sort_key(category_id: str, label: str = "") -> tuple[int, str]:
@@ -410,7 +473,7 @@ class KnowledgeGraphService:
                     "definition": "",
                     "key_points": [],
                     "sources": {},
-                    "sections": set(),
+                    "sections": {},
                     "questions": [],
                     "wrong_questions": [],
                     "chunk_count": 0,
@@ -433,7 +496,12 @@ class KnowledgeGraphService:
                     str(chunk.get("section") or chunk.get("chapter") or "")
                 )
                 if section:
-                    entry["sections"].add(section)
+                    section_score = self._section_relevance(entry["label"], chunk)
+                    if section_score:
+                        entry["sections"][section] = max(
+                            section_score,
+                            entry["sections"].get(section, 0),
+                        )
                 snippet = re.sub(r"\s+", " ", str(chunk.get("text", ""))).strip()
                 if snippet:
                     entry["_snippets"].append(
@@ -498,7 +566,14 @@ class KnowledgeGraphService:
                 {"name": name, "chunks": count}
                 for name, count in sorted(entry["sources"].items())
             ]
-            entry["sections"] = sorted(entry["sections"])[:12]
+            entry["sections"] = [
+                section
+                for section, _score in sorted(
+                    entry["sections"].items(),
+                    key=lambda item: (-item[1], item[0]),
+                )
+                if _score >= 50
+            ][:8]
             nodes.append(entry)
             edges.append({"source": f"category-{category_id}", "target": entry["id"], "type": "contains"})
             for wrong in entry["wrong_questions"]:

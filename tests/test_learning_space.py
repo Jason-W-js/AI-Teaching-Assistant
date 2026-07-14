@@ -103,6 +103,8 @@ def test_knowledge_graph_rejects_ocr_question_sentences_as_node_labels():
         "1.3.2 二极管电路如图所示,请判断二极管是导通还是截止"
     ) == ""
     assert KnowledgeGraphService._clean_point("二极管的伏安特性") == "二极管的伏安特性"
+    assert KnowledgeGraphService._clean_point("（已压缩）电子电路基础") == ""
+    assert KnowledgeGraphService._clean_point("基本电路和基本分析方法内容回顾") == ""
     assert KnowledgeGraphService._clean_section("1.2.4 二极管的等效电路")
     assert KnowledgeGraphService._clean_section(
         "0.7V。设晶体管β=50,二极管的动态电阻可以忽略不计"
@@ -178,3 +180,53 @@ def test_knowledge_graph_curates_field_effect_active_load_card():
         "场效应管有源负载能够提供较高的等效交流电阻，从而提高单级放大电路的电压增益。",
         "场效应管电流源可提供较稳定的静态工作点，并有利于提高集成度和输出动态范围。",
     ]
+
+
+def test_knowledge_graph_category_scoring_prefers_specific_domain_markers():
+    assert KnowledgeGraphService._category(
+        "场效应管有源电阻及电流源电路"
+    )[0] == "半导体与器件"
+    assert KnowledgeGraphService._category(
+        "负反馈对输入电阻的影响"
+    )[0] == "模拟电子电路"
+    assert KnowledgeGraphService._category("反向截止")[0] == "半导体与器件"
+    assert KnowledgeGraphService._category("低通滤波器")[0] == "动态与频域电路"
+
+
+def test_knowledge_graph_only_lists_primary_sections_for_a_concept(tmp_path):
+    chunks = [
+        {
+            "id": "definition",
+            "text": "叠加定理是线性电路分析中的基本定理。",
+            "source": "电路基础.pdf",
+            "chapter": "网络定理",
+            "section": "叠加定理",
+            "doc_type": "textbook",
+            "knowledge_tags": ["叠加定理"],
+        },
+        {
+            "id": "application",
+            "text": "本节分析差分放大电路。计算某一输出时可以利用叠加定理。",
+            "source": "模拟电子技术.pdf",
+            "chapter": "放大电路",
+            "section": "差分放大电路",
+            "doc_type": "textbook",
+            "knowledge_tags": ["叠加定理"],
+        },
+    ]
+    (tmp_path / "chunks.jsonl").write_text(
+        "\n".join(json.dumps(item, ensure_ascii=False) for item in chunks),
+        encoding="utf-8",
+    )
+
+    class Manager:
+        @staticmethod
+        def index_dir(_: str):
+            return tmp_path
+
+    node = KnowledgeGraphService(Manager()).build("default")["nodes"][0]
+    assert node["sections"] == ["叠加定理"]
+    assert {source["name"] for source in node["sources"]} == {
+        "电路基础.pdf",
+        "模拟电子技术.pdf",
+    }

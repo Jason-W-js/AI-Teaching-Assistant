@@ -9,6 +9,8 @@ __pycache__/
 .ruff_cache/
 frontend/node_modules/
 frontend/dist/
+frontend/vite.config.js
+frontend/vite.config.d.ts
 *.tsbuildinfo
 tools/spreadsheet/node_modules/
 *.inspect.ndjson
