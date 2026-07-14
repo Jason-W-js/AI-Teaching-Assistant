@@ -20,9 +20,11 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.agents.workflow import CircuitTutorEngine
 from backend.app.config import settings
 from backend.app.rag.manager import KnowledgeBaseManager
+from backend.app.rag.multimodal import BuildModelConfig
 from backend.app.rag.pipeline import INGESTION_MANIFEST
 from backend.app.schemas import (
     ChatRequest,
+    KnowledgeBaseRebuildRequest,
     WrongQuestionCategoryCreate,
     WrongQuestionCreate,
     WrongQuestionUpdate,
@@ -34,6 +36,7 @@ from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, Attach
 from backend.app.services.problem_sessions import ProblemSessionStore
 from backend.app.services.knowledge_graph import KnowledgeGraphService
 from backend.app.services.wrong_notebook import WrongNotebookStore
+from backend.app.services.model_catalog import canonical_model_id
 
 
 def configure_logging() -> None:
@@ -104,6 +107,7 @@ async def lifespan(_: FastAPI):
     await lmstudio.close()
     await asyncio.gather(*(client.close() for client in specialist_clients.values()))
     await memory.close()
+    knowledge_bases.close_all()
 
 
 app = FastAPI(
@@ -181,6 +185,84 @@ async def health() -> dict[str, Any]:
 @app.get("/api/kb/status")
 async def knowledge_base_status() -> dict[str, Any]:
     return {"knowledge_bases": knowledge_bases.statuses()}
+
+
+@app.get("/api/kb/{knowledge_base}/graph")
+async def persisted_knowledge_graph(knowledge_base: str) -> dict[str, Any]:
+    try:
+        return knowledge_bases.graph(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/api/kb/rebuild")
+async def rebuild_knowledge_base(payload: KnowledgeBaseRebuildRequest) -> dict[str, Any]:
+    api_key = payload.api_key
+    base_url = payload.base_url
+    if payload.model_provider == "deepseek":
+        api_key = api_key or settings.deepseek_api_key
+        base_url = base_url or settings.deepseek_base_url
+    elif payload.model_provider == "qwen":
+        api_key = api_key or settings.qwen_api_key
+        base_url = base_url or settings.qwen_base_url
+    elif payload.model_provider == "lmstudio":
+        base_url = base_url or settings.lmstudio_base_url
+    config = BuildModelConfig(
+        provider=payload.model_provider,
+        model=canonical_model_id(payload.model_provider, payload.model),
+        api_key=api_key,
+        base_url=base_url,
+    )
+    try:
+        build_state = knowledge_bases.start_build(
+            payload.knowledge_base,
+            chapter_limit=payload.chapter_limit,
+            model_config=config if config.enabled else None,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "knowledge_base": payload.knowledge_base,
+        "state": "building",
+        "build": build_state,
+        "message": "多模态知识库已开始后台重建",
+    }
+
+
+@app.delete("/api/kb/{knowledge_base}/build")
+async def cancel_knowledge_base_build(knowledge_base: str) -> dict[str, Any]:
+    try:
+        state = knowledge_bases.cancel_build(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "knowledge_base": knowledge_base,
+        "state": state,
+        "message": "取消请求已提交，正在清理未完成缓存",
+    }
+
+
+@app.delete("/api/kb/{knowledge_base}")
+async def delete_knowledge_base(knowledge_base: str) -> dict[str, Any]:
+    try:
+        await knowledge_bases.delete(knowledge_base)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "knowledge_base": knowledge_base,
+        "message": f"知识库 {knowledge_base} 已删除",
+    }
 
 
 @app.get("/api/sessions")

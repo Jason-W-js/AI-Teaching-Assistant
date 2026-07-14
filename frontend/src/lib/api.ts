@@ -11,7 +11,7 @@ export type SourceInfo = {
 
 export type KBStatus = {
   id: string
-  state: 'ready' | 'building' | 'error' | 'missing'
+  state: 'ready' | 'building' | 'cancelling' | 'cancelled' | 'error' | 'missing'
   documents: number
   indexed_documents?: number
   failed_documents?: number
@@ -20,6 +20,15 @@ export type KBStatus = {
   relations: number
   message: string
   source_warnings?: Array<{ source: string; warnings: string[] }>
+  available?: boolean
+  progress?: number
+  stage?: string
+  cancellable?: boolean
+  circuits?: number
+  layout_elements?: number
+  schema_version?: string
+  pipeline_layers?: Record<string, unknown>
+  validation?: Record<string, unknown>
 }
 
 export type TutorAction = 'auto' | 'understand' | 'method' | 'hint' | 'check_step' | 'explain_error' | 'full_solution'
@@ -308,6 +317,36 @@ export async function uploadKnowledgeFiles(
   const result = await response.json()
   if (!response.ok) throw new Error(result.detail || result.error || '批量导入失败')
   return result
+}
+
+export async function rebuildKnowledgeBase(
+  knowledgeBase: string,
+  modelConfig: ModelConfig,
+) {
+  return jsonRequest('/api/kb/rebuild', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      knowledge_base: knowledgeBase,
+      model_provider: modelConfig.provider,
+      model: modelConfig.model,
+      api_key: modelConfig.apiKey,
+      base_url: modelConfig.baseUrl,
+      chapter_limit: null,
+    }),
+  })
+}
+
+export async function cancelKnowledgeBaseBuild(knowledgeBase: string) {
+  return jsonRequest(`/api/kb/${encodeURIComponent(knowledgeBase)}/build`, {
+    method: 'DELETE',
+  })
+}
+
+export async function deleteKnowledgeBase(knowledgeBase: string) {
+  return jsonRequest(`/api/kb/${encodeURIComponent(knowledgeBase)}`, {
+    method: 'DELETE',
+  })
 }
 
 async function jsonRequest<T>(url: string, init?: RequestInit): Promise<T> {

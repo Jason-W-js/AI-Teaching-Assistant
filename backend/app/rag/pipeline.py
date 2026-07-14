@@ -5,30 +5,44 @@ import json
 import logging
 import os
 import re
-import shutil
-import subprocess
-import sys
-import tempfile
+import threading
 import unicodedata
 import uuid
 from collections import Counter
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
-import faiss
 import fitz
-import httpx
 import numpy as np
 from docx import Document
 from openpyxl import load_workbook
-from sentence_transformers import SentenceTransformer
 
+from backend.app.config import settings
 from backend.app.rag.models import PageDocument, TextChunk
+from backend.app.rag.embedding_runtime import encode_texts
+from backend.app.rag.ontology import COURSE_CONCEPTS, extract_course_concepts
+from backend.app.rag.multimodal import (
+    BuildModelConfig,
+    LayoutElement,
+    build_local_knowledge_graph,
+    enhance_pdf,
+    multimodal_chunks,
+)
+from backend.app.rag.stores import build_qdrant_indexes, sync_neo4j_graph
 
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_EXTENSIONS = {".pdf", ".md", ".txt", ".docx", ".xlsx", ".json"}
+
+class KnowledgeBaseBuildCancelled(RuntimeError):
+    """Raised when a cooperative knowledge-base build cancellation is requested."""
+
+
+BuildProgressCallback = Callable[[int, str, str], None]
+
+KNOWLEDGE_EXTENSIONS = {".pdf", ".md", ".txt", ".docx"}
+QUESTION_BANK_EXTENSIONS = {".xlsx", ".json"}
+SUPPORTED_EXTENSIONS = KNOWLEDGE_EXTENSIONS | QUESTION_BANK_EXTENSIONS
 INGESTION_MANIFEST = ".ingestion_manifest.json"
 EXTRACTION_CACHE_VERSION = "2"
 AD_NOISE = (
@@ -37,75 +51,9 @@ AD_NOISE = (
     "关注公众号",
     "购买正版",
     "资源下载",
-    "学兔兔",
-    "bzfxw",
     "广告",
 )
-TAG_KEYWORDS = (
-    "电路模型",
-    "参考方向",
-    "关联参考方向",
-    "欧姆定律",
-    "基尔霍夫电流定律",
-    "基尔霍夫电压定律",
-    "KCL",
-    "KVL",
-    "节点电压法",
-    "回路电流法",
-    "网孔电流法",
-    "叠加定理",
-    "戴维南定理",
-    "诺顿定理",
-    "最大功率传输定理",
-    "含受控源电路",
-    "一阶电路",
-    "RC电路",
-    "RL电路",
-    "换路定则",
-    "三要素法",
-    "时间常数",
-    "零输入响应",
-    "零状态响应",
-    "全响应",
-    "二阶电路",
-    "正弦稳态",
-    "相量法",
-    "复阻抗",
-    "相位差",
-    "有功功率",
-    "无功功率",
-    "视在功率",
-    "复功率",
-    "功率因数",
-    "RLC谐振",
-    "串联谐振",
-    "并联谐振",
-    "频率响应",
-    "传递函数",
-    "拉普拉斯变换",
-    "二端口网络",
-    "运算放大器",
-    "本征半导体",
-    "N型半导体",
-    "P型半导体",
-    "PN结",
-    "二极管",
-    "稳压二极管",
-    "晶体管",
-    "场效应管",
-    "静态工作点",
-    "伏安特性",
-    "单向导电性",
-    "反向击穿",
-    "基尔霍夫定律",
-)
-SECTION_CONCEPT_MARKERS = (
-    "电路", "电压", "电流", "电阻", "电容", "电感", "功率", "频率", "信号",
-    "半导体", "PN结", "二极管", "晶体管", "场效应管", "MOS", "器件", "集成",
-    "放大", "反馈", "振荡", "滤波", "比较器", "运算", "整流", "稳压", "偏置",
-    "模型", "特性", "参数", "响应", "网络", "相量", "阻抗", "谐振", "工作点",
-)
-
+TAG_KEYWORDS = COURSE_CONCEPTS
 DOCUMENT_TYPE_TOKENS = {
     "exam": ("试卷", "考试", "期末", "期中", "月考", "真题", "模拟卷", "测试卷", "练习卷"),
     "question_bank": ("题库", "习题集", "练习题", "习题答案"),
@@ -179,47 +127,10 @@ def _is_chapter_title(title: str) -> bool:
     return bool(re.match(r"^第[一二三四五六七八九十百0-9]+章", title.replace(" ", "")))
 
 
-def _pdf_page_range(
-    document: fitz.Document, chapter_limit: int | None
-) -> tuple[int, int, list[list[Any]]]:
-    toc = [item for item in document.get_toc(simple=True) if len(item) >= 3]
-    chapters = [
-        (str(title).strip(), int(page))
-        for level, title, page in toc
-        if level == 1 and _is_chapter_title(str(title).strip())
-    ]
-    if not chapters:
-        return 1, document.page_count, toc
-    start_page = chapters[0][1]
-    end_page = (
-        chapters[chapter_limit][1] - 1
-        if chapter_limit and len(chapters) > chapter_limit
-        else document.page_count
-    )
-    return start_page, end_page, toc
-
-
-def _pdf_hierarchy(
-    toc: list[list[Any]], page_number: int, fallback: str
-) -> tuple[str, str]:
-    chapter = ""
-    section = ""
-    for level, title, toc_page, *_ in toc:
-        if int(toc_page) > page_number:
-            break
-        normalized = _normalize_line(re.sub(r"\s+", " ", str(title)).strip())
-        if level == 1 and _is_chapter_title(normalized):
-            chapter = normalized
-            section = ""
-        elif level >= 2:
-            section = normalized
-    return chapter or fallback, section or chapter or fallback
-
-
 def _infer_ocr_hierarchy(
     text: str, fallback: str, chapter: str, section: str
 ) -> tuple[str, str]:
-    """Recover printed chapter/section headings when a scan has no PDF outline."""
+    """Recover printed chapter/section headings when a scan has no outline."""
     lines = [_normalize_line(line) for line in text.splitlines()[:16]]
     lines = [line for line in lines if 3 <= len(line) <= 90]
     current_chapter = chapter or fallback
@@ -237,220 +148,73 @@ def _infer_ocr_hierarchy(
             current_section = line
             continue
         section_match = re.match(r"^(\d+)(?:\.\d+){1,3}\s*[^\d\W].+", line)
-        if section_match or re.match(
-            r"^[一二三四五六七八九十]+[、.]\s*.+", line
-        ):
+        if section_match or re.match(r"^[一二三四五六七八九十]+[、.]\s*.+", line):
             current_section = line
             if section_match:
                 major = int(section_match.group(1))
                 numerals = "零一二三四五六七八九十"
-                inferred_prefix = f"第{numerals[major]}章" if 0 < major < len(numerals) else f"第{major}章"
+                inferred_prefix = (
+                    f"第{numerals[major]}章"
+                    if 0 < major < len(numerals)
+                    else f"第{major}章"
+                )
                 if not current_chapter.startswith(inferred_prefix):
                     current_chapter = inferred_prefix
     return current_chapter, current_section
 
 
-def extract_pdf(
-    path: Path,
-    chapter_limit: int | None = None,
-    *,
-    doc_type: str = "textbook",
-) -> list[PageDocument]:
+def extract_pdf(path: Path, chapter_limit: int | None = None) -> list[PageDocument]:
     document = fitz.open(path)
-    start_page, end_page, toc = _pdf_page_range(document, chapter_limit)
+    toc = [item for item in document.get_toc(simple=True) if len(item) >= 3]
+    chapters = [(str(title).strip(), int(page)) for level, title, page in toc if level == 1 and _is_chapter_title(str(title).strip())]
+    if chapters:
+        start_page = chapters[0][1]
+        if chapter_limit and len(chapters) > chapter_limit:
+            end_page = chapters[chapter_limit][1] - 1
+        else:
+            end_page = document.page_count
+    else:
+        start_page, end_page = 1, document.page_count
 
     raw_pages = [document[index - 1].get_text("text") for index in range(start_page, end_page + 1)]
     repeated_noise = _edge_noise(raw_pages)
     page_docs: list[PageDocument] = []
+    page_range_match = re.search(r"(?:pages?|页)[_-]?(\d+)[_-](\d+)", path.stem, re.I)
+    source_page_offset = int(page_range_match.group(1)) - 1 if page_range_match else 0
     for page_number, raw_text in zip(range(start_page, end_page + 1), raw_pages):
-        current_chapter, current_section = _pdf_hierarchy(toc, page_number, path.stem)
+        current_chapter = ""
+        current_section = ""
+        for level, title, toc_page in toc:
+            if int(toc_page) > page_number:
+                break
+            title = _normalize_line(re.sub(r"\s+", " ", str(title)).strip())
+            if level == 1 and _is_chapter_title(title):
+                current_chapter = title
+                current_section = ""
+            elif level >= 2:
+                current_section = title
         text = clean_page_text(raw_text, repeated_noise)
-        if len(text) < 30:
+        page_object = document[page_number - 1]
+        has_visual_content = bool(page_object.get_images(full=True)) or len(page_object.get_drawings()) >= 3
+        has_formula_content = bool(
+            re.search(r"[=+−±√∫ΣΩπ^_].*[A-Za-z0-9]|[A-Za-z0-9].*[=+−±√∫ΣΩπ^_]", text)
+        )
+        if len(text) < 30 and not has_visual_content and not has_formula_content:
             continue
+        if not text:
+            text = "[本页主要包含电路图、公式或其他图形内容]"
         page_docs.append(
             PageDocument(
                 text=text,
                 source=path.name,
                 page=page_number,
-                chapter=current_chapter,
-                section=current_section,
-                doc_type=doc_type,
+                chapter=current_chapter or path.stem,
+                section=current_section or current_chapter or path.stem,
+                source_page=source_page_offset + page_number,
             )
         )
     document.close()
     return page_docs
-
-
-def _extract_pdf_macos_vision(
-    path: Path, chapter_limit: int | None = None
-) -> list[PageDocument]:
-    """Optional zero-install OCR fallback for macOS.
-
-    The main parser remains portable: production deployments should configure
-    PDF_EXTRACTOR_URL.  This adapter only activates automatically on macOS when
-    a scan has no usable text layer.
-    """
-    if sys.platform != "darwin" or os.getenv("PDF_LOCAL_OCR", "auto").lower() == "off":
-        return []
-    xcrun = shutil.which("xcrun")
-    source = Path(__file__).resolve().parents[3] / "scripts" / "macos_vision_ocr.m"
-    if not xcrun or not source.exists():
-        return []
-
-    raw_pages: list[tuple[int, str]] = []
-    with tempfile.TemporaryDirectory(prefix="circuitmind-ocr-") as temporary:
-        workspace = Path(temporary)
-        executable = workspace / "macos_vision_ocr"
-        module_cache = workspace / "clang-module-cache"
-        module_cache.mkdir()
-        environment = {**os.environ, "CLANG_MODULE_CACHE_PATH": str(module_cache)}
-        subprocess.run(
-            [
-                xcrun,
-                "clang",
-                "-fobjc-arc",
-                "-fblocks",
-                str(source),
-                "-framework",
-                "Foundation",
-                "-framework",
-                "AppKit",
-                "-framework",
-                "Vision",
-                "-o",
-                str(executable),
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=120,
-            env=environment,
-        )
-        with fitz.open(path) as document:
-            start_page, end_page, toc = _pdf_page_range(document, chapter_limit)
-            page_numbers = list(range(start_page, end_page + 1))
-            for offset in range(0, len(page_numbers), 8):
-                batch = page_numbers[offset : offset + 8]
-                image_paths: list[Path] = []
-                for page_number in batch:
-                    image_path = workspace / f"page-{page_number}.png"
-                    pixmap = document[page_number - 1].get_pixmap(
-                        matrix=fitz.Matrix(2, 2), colorspace=fitz.csRGB, alpha=False
-                    )
-                    pixmap.save(image_path)
-                    image_paths.append(image_path)
-                completed = subprocess.run(
-                    [str(executable), *(str(item) for item in image_paths)],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    env=environment,
-                )
-                batch_results = json.loads(completed.stdout)
-                for index, item in enumerate(batch_results):
-                    raw_pages.append((batch[index], str(item.get("text", ""))))
-                for image_path in image_paths:
-                    image_path.unlink(missing_ok=True)
-                logger.info(
-                    "OCR %s: %s/%s pages",
-                    path.name,
-                    min(offset + len(batch), len(page_numbers)),
-                    len(page_numbers),
-                )
-
-            repeated_noise = _edge_noise([text for _, text in raw_pages])
-            documents: list[PageDocument] = []
-            inferred_chapter = path.stem
-            inferred_section = path.stem
-            for page_number, raw_text in raw_pages:
-                text = clean_page_text(raw_text, repeated_noise)
-                if len(text) < 30:
-                    continue
-                chapter, section = _pdf_hierarchy(toc, page_number, path.stem)
-                if chapter == path.stem and section == path.stem:
-                    inferred_chapter, inferred_section = _infer_ocr_hierarchy(
-                        text, path.stem, inferred_chapter, inferred_section
-                    )
-                    chapter, section = inferred_chapter, inferred_section
-                documents.append(
-                    PageDocument(
-                        text=text,
-                        source=path.name,
-                        page=page_number,
-                        chapter=chapter,
-                        section=section,
-                    )
-                )
-            return documents
-
-
-def extract_pdf_adaptive(
-    path: Path,
-    chapter_limit: int | None = None,
-    *,
-    extractor_url: str = "",
-) -> tuple[list[PageDocument], str, list[str]]:
-    """Use an optional layout/OCR service, then fall back to local PyMuPDF.
-
-    The service boundary is deliberately generic so PDF-Extract-Kit, Docling or
-    another parser can sit behind the same adapter. It accepts multipart `file`
-    and returns `{pages: [{page, text|markdown, chapter?, section?}]}`.
-    """
-    warnings: list[str] = []
-    if extractor_url:
-        try:
-            with path.open("rb") as handle, httpx.Client(timeout=180.0, trust_env=False) as client:
-                response = client.post(
-                    extractor_url,
-                    files={"file": (path.name, handle, "application/pdf")},
-                    data={"output_format": "pages", "preserve_formulas": "true"},
-                )
-                response.raise_for_status()
-            payload = response.json()
-            pages = payload.get("pages", payload.get("data", {}).get("pages", []))
-            documents: list[PageDocument] = []
-            for index, item in enumerate(pages, 1):
-                if not isinstance(item, dict):
-                    continue
-                # Layout-aware adapters often name their output `markdown` so
-                # formulas and tables survive as LaTeX/Markdown instead of OCR
-                # character soup. Plain `text` remains fully compatible.
-                content = str(item.get("markdown") or item.get("text") or "")
-                if len(content.strip()) < 30:
-                    continue
-                documents.append(
-                    PageDocument(
-                        text=clean_page_text(content),
-                        source=path.name,
-                        page=int(item.get("page") or item.get("page_number") or index),
-                        chapter=str(item.get("chapter") or path.stem),
-                        section=str(item.get("section") or item.get("chapter") or path.stem),
-                    )
-                )
-            if documents:
-                parser = str(payload.get("parser") or "external-layout-ocr")
-                return documents, parser, warnings
-            warnings.append("外部布局/OCR解析器未返回有效页面，已回退 PyMuPDF")
-        except Exception as exc:
-            warnings.append(f"外部布局/OCR解析失败，已回退 PyMuPDF：{exc}")
-
-    documents = extract_pdf(path, chapter_limit)
-    with fitz.open(path) as pdf:
-        start_page, end_page, _ = _pdf_page_range(pdf, chapter_limit)
-        expected_pages = end_page - start_page + 1
-    if len(documents) < max(1, int(expected_pages * 0.2)):
-        warnings.append("原生文本覆盖率较低，检测为扫描版 PDF")
-        try:
-            ocr_documents = _extract_pdf_macos_vision(path, chapter_limit)
-        except Exception as exc:
-            warnings.append(f"本地 OCR 解析失败：{exc}")
-            ocr_documents = []
-        if ocr_documents:
-            warnings.append("已自动使用 macOS Vision OCR；跨平台部署建议配置 PDF_EXTRACTOR_URL")
-            return ocr_documents, "macos-vision-ocr", warnings
-        warnings.append("请配置 PDF_EXTRACTOR_URL 或安装可用的本地 OCR 解析器")
-    return documents, "pymupdf", warnings
 
 
 def extract_markdown_or_text(path: Path) -> list[PageDocument]:
@@ -616,12 +380,17 @@ def _load_ingestion_manifest(resources_dir: Path) -> dict[str, str]:
     except (OSError, json.JSONDecodeError):
         return {}
     files = value.get("files", value) if isinstance(value, dict) else {}
-    return {
-        str(name): str(metadata.get("document_type", metadata) if isinstance(metadata, dict) else metadata)
-        for name, metadata in files.items()
-        if str(metadata.get("document_type", metadata) if isinstance(metadata, dict) else metadata)
-        in {"auto", "textbook", "exam", "question_bank", "notes"}
-    }
+    result: dict[str, str] = {}
+    for name, metadata in files.items():
+        document_type = (
+            metadata.get("document_type", metadata)
+            if isinstance(metadata, dict)
+            else metadata
+        )
+        document_type = str(document_type)
+        if document_type in {"auto", "textbook", "exam", "question_bank", "notes"}:
+            result[str(name)] = document_type
+    return result
 
 
 def list_source_files(resources_dir: Path) -> list[Path]:
@@ -640,7 +409,7 @@ def _pdf_cache_path(
     cache_dir: Path,
     path: Path,
     chapter_limit: int | None,
-    extractor_url: str,
+    extractor_url: str = "",
 ) -> Path:
     stat = path.stat()
     signature = "|".join(
@@ -657,7 +426,9 @@ def _pdf_cache_path(
     return cache_dir / f"{hashlib.sha1(signature.encode('utf-8')).hexdigest()}.json"
 
 
-def _load_cached_pdf(cache_path: Path) -> tuple[list[PageDocument], str, list[str]] | None:
+def _load_cached_pdf(
+    cache_path: Path,
+) -> tuple[list[PageDocument], str, list[str]] | None:
     try:
         payload = json.loads(cache_path.read_text(encoding="utf-8"))
         if payload.get("schema_version") != EXTRACTION_CACHE_VERSION:
@@ -695,30 +466,31 @@ def _write_cached_pdf(
     temporary.replace(cache_path)
 
 
-def classify_document(path: Path, documents: list[PageDocument], declared: str = "auto") -> str:
-    """Classify a source without coupling ingestion to a particular PDF parser."""
+def classify_document(
+    path: Path, documents: list[PageDocument], declared: str = "auto"
+) -> str:
     if declared != "auto":
         return declared
-    if path.suffix.lower() in {".xlsx", ".json"}:
+    if path.suffix.lower() in QUESTION_BANK_EXTENSIONS:
         return "question_bank"
     filename = path.stem.lower().replace(" ", "")
     for document_type in ("exam", "question_bank", "textbook"):
         if any(token in filename for token in DOCUMENT_TYPE_TOKENS[document_type]):
             return document_type
     sample = "\n".join(document.text for document in documents[:12])
-    numbered = len(re.findall(r"(?:^|\n)\s*(?:\d{1,3}[.、．)]|[一二三四五六七八九十]+[、.])\s*", sample))
-    question_words = len(re.findall(r"(?:选择题|填空题|计算题|简答题|证明题|本题\s*\d+\s*分)", sample))
+    numbered = len(
+        re.findall(r"(?:^|\n)\s*(?:\d{1,3}[.、．)]|[一二三四五六七八九十]+[、.])\s*", sample)
+    )
+    question_words = len(
+        re.findall(r"(?:选择题|填空题|计算题|简答题|证明题|本题\s*\d+\s*分)", sample)
+    )
     return "exam" if numbered >= 8 and question_words >= 1 else "textbook"
 
 
 def extract_questions_from_documents(
     documents: list[PageDocument], source: str
 ) -> list[dict[str, Any]]:
-    """Extract question stems from exam-like documents with stable source anchors.
-
-    This lightweight parser intentionally produces reviewable candidates. Layout/OCR
-    engines can be added before this stage without changing the downstream schema.
-    """
+    """Extract reviewable question candidates while preserving page anchors."""
     questions: list[dict[str, Any]] = []
     marker = re.compile(
         r"(?m)^(?:\s*)(?P<label>(?:第\s*)?\d{1,3}\s*[.、．）)]|[一二三四五六七八九十]+[、.])\s*"
@@ -731,20 +503,21 @@ def extract_questions_from_documents(
             stem = re.split(r"\n\n(?:参考答案|答案|解析)[:：]?", stem, maxsplit=1)[0].strip()
             if not 12 <= len(stem) <= 5000:
                 continue
-            digest = hashlib.sha1(f"{source}|{document.page}|{stem[:240]}".encode("utf-8")).hexdigest()[:12]
-            tags = _knowledge_tags(stem, document.section)
+            digest = hashlib.sha1(
+                f"{source}|{document.page}|{stem[:240]}".encode("utf-8")
+            ).hexdigest()[:12]
             questions.append(
                 {
                     "question_id": f"AUTO-{digest}",
                     "question_text": stem,
-                    "knowledge_tags": tags,
+                    "knowledge_tags": extract_course_concepts(stem, document.section)[:8],
                     "standard_answer": "",
                     "common_mistakes": "",
                     "difficulty": "待标注",
                     "question_type": "自动抽取题",
                     "solution_steps": "",
                     "source": source,
-                    "source_page": document.page,
+                    "source_page": document.source_page or document.page,
                     "extraction": "rule_candidate",
                 }
             )
@@ -752,24 +525,7 @@ def extract_questions_from_documents(
 
 
 def _knowledge_tags(text: str, section: str) -> list[str]:
-    tags = [keyword for keyword in TAG_KEYWORDS if keyword.lower() in text.lower()]
-    normalized_section = re.sub(r"^\d+(?:\.\d+)*\s*", "", section).strip()
-    normalized_section = re.sub(
-        r"^[一二三四五六七八九十]+[、.．]\s*", "", normalized_section
-    ).strip()
-    section_is_concept = bool(
-        2 <= len(normalized_section) <= 22
-        and not re.search(r"[,，。！？?:：=;；]", normalized_section)
-        and not re.match(r"^(?:第?[一二三四五六七八九十百0-9]+章|本章|习题|思考题)", normalized_section)
-        and not any(
-            marker in normalized_section
-            for marker in ("如图", "见图", "题解", "例题", "已知", "试求", "请判断", "设在", "通过调节", "改变")
-        )
-        and any(marker.casefold() in normalized_section.casefold() for marker in SECTION_CONCEPT_MARKERS)
-    )
-    if section_is_concept and normalized_section not in tags:
-        tags.insert(0, normalized_section)
-    return tags[:8]
+    return extract_course_concepts(text, section)[:8]
 
 
 def _sentence_pieces(text: str, max_chars: int = 900) -> list[str]:
@@ -818,10 +574,16 @@ def chunk_documents(documents: Iterable[PageDocument], max_chars: int = 900) -> 
                     source=document.source,
                     chapter=document.chapter,
                     section=document.section,
-                    page_start=document.page,
-                    page_end=document.page,
+                    page_start=document.source_page or document.page,
+                    page_end=document.source_page or document.page,
                     doc_type=document.doc_type,
                     knowledge_tags=_knowledge_tags(text, document.section),
+                    element_type=document.element_type,
+                    bbox=document.bbox,
+                    parent_id=document.parent_id,
+                    image_path=document.image_path,
+                    content_hash=document.content_hash,
+                    multimodal=document.extra,
                 )
             )
             overlap = text[-140:] if len(text) > 140 else ""
@@ -878,8 +640,85 @@ def _write_clean_markdown(path: Path, documents: list[PageDocument], output_dir:
         if document.section and document.section != last_section and document.section != document.chapter:
             lines.extend([f"### {document.section}", ""])
             last_section = document.section
-        lines.extend([f"<!-- source={document.source}; page={document.page} -->", document.text, ""])
+        lines.extend([
+            f"<!-- source={document.source}; page={document.source_page or document.page} -->",
+            document.text,
+            "",
+        ])
     (output_dir / f"{path.stem}.clean.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def validate_build_artifacts(
+    chunks: list[TextChunk],
+    embeddings: np.ndarray,
+    graph: dict[str, Any],
+) -> dict[str, Any]:
+    if any(chunk.doc_type == "question" for chunk in chunks):
+        raise RuntimeError("构建校验失败：题库 Chunk 不得进入课程知识库")
+    if embeddings.ndim != 2 or embeddings.shape[0] != len(chunks):
+        raise RuntimeError("构建校验失败：向量数量与 Chunk 数量不一致")
+    node_ids = {
+        str(node.get("id", "")) for node in graph.get("nodes", []) if node.get("id")
+    }
+    dangling = [
+        edge for edge in graph.get("edges", [])
+        if str(edge.get("source", "")) not in node_ids
+        or str(edge.get("target", "")) not in node_ids
+    ]
+    if dangling:
+        raise RuntimeError(f"构建校验失败：知识图谱存在 {len(dangling)} 条悬空关系")
+    invalid_bbox = [
+        chunk.id for chunk in chunks
+        if chunk.bbox is not None and len(chunk.bbox) != 4
+    ]
+    if invalid_bbox:
+        raise RuntimeError(f"构建校验失败：{len(invalid_bbox)} 个多模态元素坐标不完整")
+    return {
+        "status": "passed",
+        "chunks": len(chunks),
+        "vectors": int(embeddings.shape[0]),
+        "vector_dimension": int(embeddings.shape[1]),
+        "graph_nodes": len(node_ids),
+        "graph_edges": len(graph.get("edges", [])),
+        "question_chunks": 0,
+        "dangling_graph_edges": 0,
+    }
+
+
+def _formula_pipeline_stats(output_dir: Path, elements: list[LayoutElement]) -> dict[str, Any]:
+    categories: Counter[str] = Counter()
+    for path in output_dir.glob("*.pdf_extract_kit.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        for region in payload.get("regions", []):
+            if not isinstance(region, dict):
+                continue
+            category = str(region.get("category", "")).lower()
+            detector = str(region.get("detector", ""))
+            if detector.endswith(":formula") or category in {
+                "isolate_formula", "isolated", "isolated_formula"
+            }:
+                categories[category] += 1
+    formulas = [element for element in elements if element.element_type == "formula"]
+    return {
+        "detected_regions": sum(categories.values()),
+        "inline_regions_kept_in_text": categories.get("inline", 0),
+        "display_candidates": sum(
+            categories.get(name, 0)
+            for name in ("isolate_formula", "isolated", "isolated_formula")
+        ),
+        "indexed_formulas": len(formulas),
+        "rejected_or_merged_regions": max(0, sum(categories.values()) - len(formulas)),
+        "uncertain_formulas": sum(element.uncertain for element in formulas),
+        "recognition": (
+            "PDF-Extract-Kit localization + native PDF geometry LaTeX + "
+            f"qwen/{settings.qwen_circuit_vision_model} scan fallback"
+            if settings.qwen_api_key
+            else "PDF-Extract-Kit localization + PyMuPDF text fallback"
+        ),
+    }
 
 
 def build_knowledge_base(
@@ -888,50 +727,72 @@ def build_knowledge_base(
     embedding_model_path: Path,
     *,
     chapter_limit: int | None = None,
-    pdf_extractor_url: str | None = None,
+    model_config: BuildModelConfig | None = None,
+    knowledge_base_id: str | None = None,
+    sync_graph_store: bool = True,
+    progress_callback: BuildProgressCallback | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
+    def report(progress: int, stage: str, message: str) -> None:
+        if progress_callback is not None:
+            progress_callback(progress, stage, message)
+        if cancel_event is not None and cancel_event.is_set():
+            raise KnowledgeBaseBuildCancelled("用户已取消知识库构建")
+
     resources_dir = resources_dir.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
     cleaned_dir = output_dir / "cleaned_documents"
     cleaned_dir.mkdir(parents=True, exist_ok=True)
+    report(5, "document_scanning", "正在扫描教材与讲义")
 
     documents: list[PageDocument] = []
+    elements: list[LayoutElement] = []
     questions: list[dict[str, Any]] = []
-    source_files = list_source_files(resources_dir)
-    declared_types = _load_ingestion_manifest(resources_dir)
-    pdf_extractor_url = (pdf_extractor_url if pdf_extractor_url is not None else os.getenv("PDF_EXTRACTOR_URL", "")).strip()
-    extraction_cache = output_dir.parent / ".extraction_cache"
+    cleaning_audits: list[dict[str, Any]] = []
     source_manifest: list[dict[str, Any]] = []
-    for path in source_files:
+    declared_types = _load_ingestion_manifest(resources_dir)
+    candidate_files = list_source_files(resources_dir)
+    source_files = [
+        path for path in candidate_files if path.suffix.lower() in KNOWLEDGE_EXTENSIONS
+    ]
+    excluded_sources = [
+        {
+            "source": path.name,
+            "reason": "题库与课程正文向量隔离，但会进入结构化题库并关联教材知识",
+        }
+        for path in candidate_files
+        if path.suffix.lower() in QUESTION_BANK_EXTENSIONS
+    ]
+    source_count = max(1, len(source_files))
+    for source_index, path in enumerate(source_files):
+        report(
+            10 + int(source_index / source_count * 35),
+            "document_parsing",
+            f"正在解析 {path.name}（{source_index + 1}/{len(source_files)}）",
+        )
         suffix = path.suffix.lower()
         declared_type = declared_types.get(path.name, "auto")
         extracted: list[PageDocument] = []
         extracted_questions: list[dict[str, Any]] = []
         parser_name = suffix.lstrip(".")
         warnings: list[str] = []
-        cache_hit = False
         if suffix == ".pdf":
-            cache_path = _pdf_cache_path(
-                extraction_cache, path, chapter_limit, pdf_extractor_url
+            extracted = extract_pdf(path, chapter_limit)
+            extracted, pdf_elements, audit = enhance_pdf(
+                path,
+                extracted,
+                output_dir,
+                model_config=model_config,
             )
-            cached = _load_cached_pdf(cache_path)
-            if cached:
-                extracted, parser_name, warnings = cached
-                cache_hit = True
-            else:
-                extracted, parser_name, warnings = extract_pdf_adaptive(
-                    path, chapter_limit, extractor_url=pdf_extractor_url
-                )
-                _write_cached_pdf(cache_path, extracted, parser_name, warnings)
+            elements.extend(pdf_elements)
+            cleaning_audits.extend(
+                {**item, "source": path.name} for item in audit
+            )
         elif suffix in {".md", ".txt"}:
             extracted = extract_markdown_or_text(path)
         elif suffix == ".docx":
             extracted = extract_docx(path)
-        elif suffix == ".xlsx":
-            extracted_questions = extract_question_xlsx(path)
-        elif suffix == ".json":
-            extracted_questions = extract_question_json(path)
 
         document_type = classify_document(path, extracted, declared_type)
         for document in extracted:
@@ -940,10 +801,10 @@ def build_knowledge_base(
             documents.extend(extracted)
             _write_clean_markdown(path, extracted, cleaned_dir)
         if document_type in {"exam", "question_bank"} and extracted:
-            extracted_questions.extend(extract_questions_from_documents(extracted, path.name))
-        questions.extend(extracted_questions)
+            extracted_questions = extract_questions_from_documents(extracted, path.name)
+            questions.extend(extracted_questions)
         if suffix == ".pdf" and not extracted:
-            warnings.append("未提取到文本，可能是扫描版 PDF；请配置布局/OCR解析器后重建")
+            warnings.append("未提取到可用内容，请检查 PDF 解析或视觉模型配置")
         source_manifest.append(
             {
                 "source": path.name,
@@ -952,16 +813,50 @@ def build_knowledge_base(
                 "pages_or_sections": len(extracted),
                 "questions": len(extracted_questions),
                 "parser": parser_name,
-                "cache_hit": cache_hit,
                 "warnings": warnings,
             }
         )
+        report(
+            10 + int((source_index + 1) / source_count * 35),
+            "document_cleaning",
+            f"已完成 {path.name} 的解析与清洗",
+        )
+    for path in candidate_files:
+        suffix = path.suffix.lower()
+        if suffix not in QUESTION_BANK_EXTENSIONS:
+            continue
+        extracted_questions = (
+            extract_question_xlsx(path) if suffix == ".xlsx" else extract_question_json(path)
+        )
+        questions.extend(extracted_questions)
+        source_manifest.append(
+            {
+                "source": path.name,
+                "document_type": "question_bank",
+                "declared_type": declared_types.get(path.name, "auto"),
+                "pages_or_sections": 0,
+                "questions": len(extracted_questions),
+                "parser": suffix.lstrip("."),
+                "warnings": [] if extracted_questions else ["未识别到符合结构的题目"],
+            }
+        )
 
-    # Course materials and the structured question bank have different trust
-    # and retrieval semantics.  Only course chunks enter the RAG vector index;
-    # questions stay in question_bank.json and are queried by the quiz workflow.
-    chunks = chunk_documents(documents)
-    question_items = question_chunks(questions)
+    structured_questions = {
+        "schema_version": "2.1",
+        "questions": questions,
+        "excluded_sources": excluded_sources,
+        "message": "题库与课程正文向量隔离，并通过知识关联表连接教材章节。",
+    }
+    (output_dir / "question_bank.json").write_text(
+        json.dumps(structured_questions, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (output_dir / "source_manifest.json").write_text(
+        json.dumps({"schema_version": "1.1", "sources": source_manifest}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    report(50, "chunking", "正在切分文本并整理多模态元素")
+    chunks = chunk_documents(documents) + multimodal_chunks(elements)
     if not chunks:
         raise RuntimeError(f"在 {resources_dir} 中没有提取到可索引内容")
 
@@ -970,8 +865,24 @@ def build_knowledge_base(
         "\n".join(json.dumps(chunk.to_dict(), ensure_ascii=False) for chunk in chunks),
         encoding="utf-8",
     )
+    (output_dir / "multimodal_elements.jsonl").write_text(
+        "\n".join(json.dumps(element.to_dict(), ensure_ascii=False) for element in elements),
+        encoding="utf-8",
+    )
+    (output_dir / "cleaning_audit.json").write_text(
+        json.dumps(cleaning_audits, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
-    model = SentenceTransformer(str(embedding_model_path), device="cpu")
+    report(60, "knowledge_graph", "正在构建知识图谱关系")
+    graph = build_local_knowledge_graph(chunks)
+    (output_dir / "knowledge_graph.json").write_text(
+        json.dumps(graph, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    if settings.qdrant_url:
+        # Establish native-module import order before Torch on Windows.
+        import qdrant_client  # noqa: F401
+
     embedding_texts = [
         "\n".join(
             filter(
@@ -981,50 +892,46 @@ def build_knowledge_base(
         )
         for chunk in chunks
     ]
-    embeddings = model.encode(
+    report(68, "embedding", f"正在生成 {len(chunks)} 个内容向量")
+    embeddings = encode_texts(
+        embedding_model_path,
         embedding_texts,
         batch_size=32,
         show_progress_bar=True,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-    ).astype(np.float32)
-    index = faiss.IndexFlatIP(embeddings.shape[1])
-    index.add(embeddings)
-    # FAISS' Windows file writer cannot open paths containing Chinese characters.
-    # Serialize in memory and let Python handle the Unicode path instead.
-    serialized_index = faiss.serialize_index(index)
-    (output_dir / "vectors.faiss").write_bytes(serialized_index.tobytes())
+    )
 
+    # Questions remain outside the authoritative course vector index, but they
+    # receive their own embeddings so every imported exam/question can point to
+    # the most relevant textbook chunks with auditable page-level provenance.
     relations: list[dict[str, Any]] = []
     related_by_question: dict[str, list[dict[str, Any]]] = {}
+    question_items = question_chunks(questions)
     if question_items:
-        question_embeddings = model.encode(
+        question_embeddings = encode_texts(
+            embedding_model_path,
             [
                 "\n".join(
-                    filter(
-                        None,
-                        [item.section, " ".join(item.knowledge_tags), item.text],
-                    )
+                    filter(None, [item.section, " ".join(item.knowledge_tags), item.text])
                 )
                 for item in question_items
             ],
             batch_size=32,
             show_progress_bar=False,
-            normalize_embeddings=True,
-            convert_to_numpy=True,
-        ).astype(np.float32)
+        )
     else:
         question_embeddings = np.empty((0, embeddings.shape[1]), dtype=np.float32)
     textbook_indices = [
-        index for index, chunk in enumerate(chunks) if chunk.doc_type in {"textbook", "notes"}
+        index
+        for index, chunk in enumerate(chunks)
+        if chunk.doc_type in {"textbook", "notes"}
     ]
-    for question_index, chunk in enumerate(question_items):
+    for question_index, question_chunk in enumerate(question_items):
         if not textbook_indices:
             break
         similarities = embeddings[textbook_indices] @ question_embeddings[question_index]
         shared_tag_sets = [
-            set(chunk.knowledge_tags) & set(chunks[target_index].knowledge_tags)
-            for target_index in textbook_indices
+            set(question_chunk.knowledge_tags) & set(chunks[target].knowledge_tags)
+            for target in textbook_indices
         ]
         combined_scores = np.asarray(
             [
@@ -1033,52 +940,69 @@ def build_knowledge_base(
             ],
             dtype=np.float32,
         )
-        ranked = np.argsort(combined_scores)[::-1][:5]
-        question_id = chunk.id.removeprefix("question-")
-        for rank in ranked:
+        for rank in np.argsort(combined_scores)[::-1][:5]:
             target_index = textbook_indices[int(rank)]
             target = chunks[target_index]
             shared_tags = sorted(shared_tag_sets[int(rank)])
             semantic_score = float(similarities[int(rank)])
-            score = float(combined_scores[int(rank)])
             if semantic_score < 0.22 and not shared_tags:
                 continue
+            question_id = question_chunk.id.removeprefix("question-")
             relation = {
                 "question_id": question_id,
-                "question_chunk_id": chunk.id,
+                "question_chunk_id": question_chunk.id,
                 "knowledge_chunk_id": target.id,
                 "knowledge_source": target.source,
                 "chapter": target.chapter,
                 "section": target.section,
                 "page": target.page_start,
                 "shared_knowledge_tags": shared_tags,
-                "score": round(score, 4),
+                "score": round(float(combined_scores[int(rank)]), 4),
                 "semantic_score": round(semantic_score, 4),
                 "relation_type": "supported_by",
             }
             relations.append(relation)
             related_by_question.setdefault(question_id, []).append(relation)
-
     for question in questions:
-        question["related_knowledge"] = related_by_question.get(str(question.get("question_id")), [])
-    structured_questions = {"schema_version": "1.1", "questions": questions}
+        question["related_knowledge"] = related_by_question.get(
+            str(question.get("question_id")), []
+        )
+    structured_questions["questions"] = questions
     (output_dir / "question_bank.json").write_text(
         json.dumps(structured_questions, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     (output_dir / "knowledge_relations.jsonl").write_text(
-        "\n".join(json.dumps(item, ensure_ascii=False) for item in relations), encoding="utf-8"
-    )
-    (output_dir / "source_manifest.json").write_text(
-        json.dumps({"schema_version": "1.0", "sources": source_manifest}, ensure_ascii=False, indent=2),
+        "\n".join(json.dumps(item, ensure_ascii=False) for item in relations),
         encoding="utf-8",
     )
 
+    report(82, "validation", "正在校验向量与图谱完整性")
+    validation = validate_build_artifacts(chunks, embeddings, graph)
+    import faiss
+
+    index = faiss.IndexFlatIP(embeddings.shape[1])
+    index.add(embeddings)
+    # FAISS' Windows file writer cannot open paths containing Chinese characters.
+    # Serialize in memory and let Python handle the Unicode path instead.
+    serialized_index = faiss.serialize_index(index)
+    (output_dir / "vectors.faiss").write_bytes(serialized_index.tobytes())
+
+    report(85, "indexing", "正在写入向量索引")
+    qdrant_status = build_qdrant_indexes(output_dir, chunks, embeddings)
+    neo4j_status = (
+        sync_neo4j_graph(knowledge_base_id or output_dir.name, graph)
+        if sync_graph_store
+        else {"enabled": False, "reason": "deferred until atomic index activation"}
+    )
+
+    formula_processing = _formula_pipeline_stats(output_dir, elements)
     metadata = {
         "state": "populated",
+        "schema_version": "2.1-layered-multimodal",
         "resource_dir": str(resources_dir),
         "embedding_model": str(embedding_model_path),
         "dimension": int(embeddings.shape[1]),
-        "documents": len(source_files),
+        "documents": len(candidate_files),
         "indexed_documents": sum(
             1
             for item in source_manifest
@@ -1092,13 +1016,82 @@ def build_knowledge_base(
         "text_pages": len(documents),
         "questions": len(questions),
         "relations": len(relations),
+        "excluded_sources": excluded_sources,
         "chunks": len(chunks),
+        "layout_elements": len(elements),
+        "circuit_diagrams": sum(item.element_type == "circuit" for item in elements),
+        "formula_elements": sum(item.element_type == "formula" for item in elements),
+        "formula_processing": formula_processing,
+        "table_elements": sum(item.element_type == "table" for item in elements),
+        "discarded_pages": sum(not item.get("keep", True) for item in cleaning_audits),
+        "knowledge_graph": {"nodes": len(graph["nodes"]), "edges": len(graph["edges"]), "neo4j": neo4j_status},
+        "qdrant": qdrant_status,
+        "vision_model": (
+            f"qwen/{settings.qwen_circuit_vision_model}"
+            if settings.qwen_api_key
+            else "not-configured (safe fallback)"
+        ),
+        "pdf_extract_kit": (
+            json.loads((output_dir / "pdf_extract_kit_manifest.json").read_text(encoding="utf-8"))
+            if (output_dir / "pdf_extract_kit_manifest.json").exists()
+            else {"enabled": False}
+        ),
         "chapter_limit": chapter_limit,
-        "sources": [path.name for path in source_files],
+        "sources": [path.name for path in candidate_files],
         "source_manifest": source_manifest,
+        "validation": validation,
     }
+    metadata["pipeline_layers"] = {
+        "document_cleaning": {
+            "status": "ready",
+            "pages_reviewed": len(cleaning_audits),
+            "pages_discarded": metadata["discarded_pages"],
+            "partial_characters_removed": sum(
+                int(item.get("removed_characters", 0)) for item in cleaning_audits
+            ),
+            "question_banks_isolated": len(excluded_sources),
+        },
+        "document_parsing": {
+            "status": "ready",
+            "engine": "PDF-Extract-Kit + PyMuPDF fallback",
+            "layout_elements": len(elements),
+            "preserves_page_bbox": True,
+        },
+        "modality_processing": {
+            "status": "ready",
+            "text_chunks": sum(chunk.element_type == "text" for chunk in chunks),
+            "circuit_diagrams": metadata["circuit_diagrams"],
+            "formula_elements": metadata["formula_elements"],
+            "formula_processing": formula_processing,
+            "table_elements": metadata["table_elements"],
+            "circuit_vision_model": metadata["vision_model"],
+        },
+        "knowledge_fusion": {
+            "status": "ready",
+            "vector_store": qdrant_status.get("mode", "faiss") if qdrant_status.get("enabled") else "faiss",
+            "vector_points": len(chunks),
+            "graph_nodes": len(graph["nodes"]),
+            "graph_edges": len(graph["edges"]),
+            "graph_store": "neo4j" if neo4j_status.get("enabled") else "local-json",
+        },
+        "retrieval_service": {
+            "status": "ready",
+            "strategies": ["vector", "BM25", "knowledge-graph", "rerank"],
+            "question_bank_search": bool(questions),
+            "question_knowledge_relations": len(relations),
+        },
+        "application": {
+            "status": "ready",
+            "context_modalities": ["text", "formula", "table", "circuit-description", "netlist", "image"],
+        },
+    }
+    (output_dir / "pipeline_audit.json").write_text(
+        json.dumps(metadata["pipeline_layers"], ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
     (output_dir / "index_meta.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    report(88, "artifacts_ready", "构建产物已生成，等待原子切换")
     logger.info("Knowledge base populated: %s", metadata)
     return metadata

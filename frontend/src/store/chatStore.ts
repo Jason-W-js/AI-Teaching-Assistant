@@ -32,6 +32,7 @@ export type PendingAttachment = {
 
 const sessionKey = 'circuitmind-session-id'
 const modelConfigKey = 'circuitmind-model-config'
+const knowledgeBaseKey = 'circuitmind-knowledge-base'
 
 const defaultModelConfig: ModelConfig = {
   provider: 'lmstudio',
@@ -47,6 +48,11 @@ function getSessionId() {
     localStorage.setItem(sessionKey, value)
   }
   return value
+}
+
+function getKnowledgeBase() {
+  const value = localStorage.getItem(knowledgeBaseKey)?.trim() || 'default'
+  return /^[A-Za-z0-9_-]{1,48}$/.test(value) ? value : 'default'
 }
 
 function getModelConfig(): ModelConfig {
@@ -94,7 +100,7 @@ type ChatState = {
 export const useChatStore = create<ChatState>((set, get) => ({
   sessionId: getSessionId(),
   tutoringMode: 'guided',
-  knowledgeBase: 'default',
+  knowledgeBase: getKnowledgeBase(),
   modelConfig: getModelConfig(),
   messages: [],
   streaming: false,
@@ -104,7 +110,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
   hintLevel: 1,
   pendingAttachments: [],
   setTutoringMode: (tutoringMode) => set({ tutoringMode }),
-  setKnowledgeBase: (knowledgeBase) => set({ knowledgeBase }),
+  setKnowledgeBase: (knowledgeBase) => {
+    if (!/^[A-Za-z0-9_-]{1,48}$/.test(knowledgeBase)) return
+    localStorage.setItem(knowledgeBaseKey, knowledgeBase)
+    set({ knowledgeBase })
+  },
   setModelConfig: (modelConfig) => {
     localStorage.setItem(modelConfigKey, JSON.stringify(modelConfig))
     set({ modelConfig })

@@ -34,6 +34,10 @@ QA_INTENT_WORDS = (
     "这个答案", "这个结果", "上面的答案", "刚才的答案", "为什么会这样", "不理解",
     "不明白", "没看懂", "没懂"
 )
+PLAN_INTENT_WORDS = (
+    "学习规划", "学习计划", "复习计划", "学习路线", "规划路线", "知识补全",
+    "系统补齐", "系统复习", "查漏补缺", "备考计划", "巩固计划", "怎么复习",
+)
 CONTEXTUAL_FOLLOWUP_WORDS = (
     "这个答案", "这个结果", "这个数值", "上面的答案", "上面的结果", "刚才的答案",
     "刚才的结果", "为什么是这样", "为什么会这样", "为什么结果", "为何结果", "它为什么",
@@ -68,7 +72,7 @@ class AgentState(TypedDict, total=False):
     mode: str
     knowledge_base: str
     history: list[dict[str, str]]
-    intent: Literal["answer", "qa", "quiz", "chat"]
+    intent: Literal["answer", "qa", "quiz", "plan", "chat"]
     rewritten_query: str
     knowledge_point: str
     constraints: list[str]
@@ -102,6 +106,7 @@ class AgentState(TypedDict, total=False):
     problem_analysis: dict[str, Any]
     reference_solution: dict[str, Any]
     diagnosis: dict[str, Any]
+    plan_profile: dict[str, Any]
 
 
 @dataclass
@@ -611,7 +616,7 @@ async def _emit(state: AgentState, stage: str, message: str, agent: str) -> None
 
 
 class CircuitTutorEngine:
-    """LangGraph orchestrator for solving, Q&A, quiz, and general chat routes."""
+    """LangGraph orchestrator for solving, Q&A, quiz, planning, and chat."""
 
     def __init__(
         self,
@@ -624,6 +629,7 @@ class CircuitTutorEngine:
         self.problem_sessions = problem_sessions or ProblemSessionStore()
         self.answer_graph = self._build_answer_graph()
         self.quiz_graph = self._build_quiz_graph()
+        self.plan_graph = self._build_plan_graph()
         self.graph = self._build_orchestrator()
 
     def _build_answer_graph(self):
@@ -664,6 +670,17 @@ class CircuitTutorEngine:
         graph.add_edge("render_quiz", END)
         return graph.compile()
 
+    def _build_plan_graph(self):
+        graph = StateGraph(AgentState)
+        graph.add_node("analyze_learning_goal", self._analyze_learning_goal)
+        graph.add_node("retrieve_learning_materials", self._plan_retrieve)
+        graph.add_node("generate_learning_plan", self._generate_learning_plan)
+        graph.set_entry_point("analyze_learning_goal")
+        graph.add_edge("analyze_learning_goal", "retrieve_learning_materials")
+        graph.add_edge("retrieve_learning_materials", "generate_learning_plan")
+        graph.add_edge("generate_learning_plan", END)
+        return graph.compile()
+
     def _build_orchestrator(self):
         graph = StateGraph(AgentState)
         graph.add_node("attachment_reader", self._analyze_attachments)
@@ -671,6 +688,7 @@ class CircuitTutorEngine:
         graph.add_node("answer_agent", self._run_answer_agent)
         graph.add_node("qa_agent", self._run_qa_agent)
         graph.add_node("quiz_agent", self._run_quiz_agent)
+        graph.add_node("plan_agent", self._run_plan_agent)
         graph.add_node("conversation_agent", self._run_conversation_agent)
         graph.set_entry_point("attachment_reader")
         graph.add_edge("attachment_reader", "intent_router")
@@ -681,12 +699,14 @@ class CircuitTutorEngine:
                 "answer": "answer_agent",
                 "qa": "qa_agent",
                 "quiz": "quiz_agent",
+                "plan": "plan_agent",
                 "chat": "conversation_agent",
             },
         )
         graph.add_edge("answer_agent", END)
         graph.add_edge("qa_agent", END)
         graph.add_edge("quiz_agent", END)
+        graph.add_edge("plan_agent", END)
         graph.add_edge("conversation_agent", END)
         return graph.compile()
 
@@ -883,7 +903,7 @@ class CircuitTutorEngine:
     async def _route_intent(self, state: AgentState) -> AgentState:
         await _emit(state, "route", "正在识别学习意图", "路由 Agent")
         mode = state.get("mode", "auto")
-        if mode in {"answer", "quiz"}:
+        if mode in {"answer", "quiz", "plan"}:
             return {"intent": mode}
         combined = f"{state['message']}\n{state.get('attachment_context', '')}"
         normalized = re.sub(r"\s+", "", state.get("message", ""))
@@ -897,6 +917,8 @@ class CircuitTutorEngine:
         )
         if any(word in normalized for word in PROMPT_INJECTION_WORDS):
             return {"intent": "chat"}
+        if any(word in combined for word in PLAN_INTENT_WORDS):
+            return {"intent": "plan"}
         # Referential explanations should use one context-aware LLM call rather
         # than restarting the complete solve/diagnose/tutor graph.
         if _is_contextual_followup(state.get("message", "")):
@@ -967,6 +989,98 @@ class CircuitTutorEngine:
     async def _run_answer_agent(self, state: AgentState) -> AgentState:
         result = await self.answer_graph.ainvoke(state)
         return dict(result)
+
+    async def _run_plan_agent(self, state: AgentState) -> AgentState:
+        result = await self.plan_graph.ainvoke(state)
+        return dict(result)
+
+    async def _analyze_learning_goal(self, state: AgentState) -> AgentState:
+        await _emit(
+            state,
+            "plan-analyze",
+            "正在识别目标、薄弱点与可用学习时间",
+            "学习规划 Agent",
+        )
+        client = state.get("llm") or self.ollama
+        prompt = (
+            "从学生请求中提取可执行学习规划信息。只输出合法 JSON，字段：goal（字符串）、"
+            "knowledge_points（2-8个字符串）、current_level（基础/进阶/未知）、"
+            "time_horizon（字符串）、constraints（字符串数组）。不要虚构学生未提供的时间；未知写待确认。\n"
+            f"最近对话：{_history_text(state.get('history', []), max_messages=8)}\n"
+            f"本轮请求：{state['message']}\n附件信息：{state.get('attachment_context', '')[:4000]}"
+        )
+        try:
+            profile = _json_object(
+                await client.chat(
+                    [{"role": "user", "content": prompt}],
+                    temperature=0.05,
+                    json_mode=True,
+                    reasoning_budget=128,
+                )
+            )
+        except Exception:
+            profile = {}
+        if not profile.get("goal"):
+            profile = {
+                "goal": state["message"][:300],
+                "knowledge_points": list(_topic_keywords(state["message"])[:6]) or ["电路基础"],
+                "current_level": "未知",
+                "time_horizon": "待确认",
+                "constraints": [],
+            }
+        points = profile.get("knowledge_points")
+        if not isinstance(points, list):
+            profile["knowledge_points"] = [str(points)] if points else ["电路基础"]
+        return {"plan_profile": profile}
+
+    async def _plan_retrieve(self, state: AgentState) -> AgentState:
+        await _emit(
+            state,
+            "plan-retrieve",
+            "正在从课程知识库定位前置知识与巩固资料",
+            "检索 Agent",
+        )
+        profile = state.get("plan_profile", {})
+        query = "学习路径 前置知识 核心概念 典型题 " + " ".join(
+            str(point) for point in profile.get("knowledge_points", [])
+        ) + " " + str(profile.get("goal", ""))
+        try:
+            retriever = self.knowledge_bases.get(state.get("knowledge_base", "default"))
+            hits = await asyncio.to_thread(retriever.search, query, 8, False, None)
+        except RuntimeError:
+            hits = []
+        return {"hits": hits, "sources": [hit.source_dict() for hit in hits]}
+
+    async def _generate_learning_plan(self, state: AgentState) -> AgentState:
+        client = state.get("llm") or self.ollama
+        await _emit(
+            state,
+            "plan-generate",
+            f"{getattr(client, 'model', '当前模型')} 正在生成可执行学习路线",
+            "学习规划 Agent",
+        )
+        context = _source_context(state.get("hits", []))
+        prompt = (
+            "你是大学电路课程学习规划师。依据学生画像和检索资料制定可执行路线。"
+            "按‘诊断→前置补全→核心学习→专项练习→复盘验收’排序。"
+            "每阶段写清目标、资料依据[资料n]、具体行动、预计投入和完成标准；"
+            "最后给出7天起步清单与可量化验收指标。时间未知时给可伸缩方案，不得伪造截止日。"
+            "数学公式使用标准 LaTeX，不展示内部推理。\n\n"
+            f"学生画像：{json.dumps(state.get('plan_profile', {}), ensure_ascii=False)}\n\n"
+            f"学生原始请求：{state['message']}\n\n课程检索资料：\n{context or '未检索到资料'}"
+        )
+        parts: list[str] = []
+        delta_callback = state.get("on_delta")
+        async for token in client.stream_chat(
+            [{"role": "user", "content": prompt}], temperature=0.2
+        ):
+            parts.append(token)
+            if delta_callback:
+                await delta_callback(token)
+        response = "".join(parts).strip()
+        if not response:
+            raise RuntimeError("学习规划模型未返回最终方案")
+        return {"response": response, "agent": "学习规划 Agent"}
 
     async def _retrieve_grounded_hits(
         self,
@@ -1731,7 +1845,14 @@ class CircuitTutorEngine:
         )
         try:
             retriever = self.knowledge_bases.get(state.get("knowledge_base", "default"))
-            hits = await asyncio.to_thread(retriever.search, query, 7, True)
+            textbook_hits = await asyncio.to_thread(retriever.search, query, 5, False)
+            question_search = getattr(retriever, "search_questions", None)
+            question_hits = (
+                await asyncio.to_thread(question_search, query, 2)
+                if callable(question_search)
+                else []
+            )
+            hits = [*question_hits, *textbook_hits]
         except RuntimeError:
             hits = []
         return {

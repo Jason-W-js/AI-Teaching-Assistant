@@ -29,3 +29,5 @@ logs/
 .DS_Store
 data/problem_sessions/
 data/wrong_notebook/
+data/neo4j/
+third_party/

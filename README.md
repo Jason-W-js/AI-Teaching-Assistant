@@ -1,6 +1,6 @@
 # CircuitMind：面向电路课程的多智能体 AI 助教
 
-CircuitMind 是一个本地优先的电路课程智能学习平台。项目聚焦学生解题过程，而不是只做“输入题目、输出答案”的聊天机器人：系统会根据用户意图选择知识答疑、完整求解、步骤诊断、同类出题或会话引导流程，并将课程知识库、题库、错题本和知识图谱关联起来。
+CircuitMind 是一个本地优先的电路课程智能学习平台。项目聚焦学生解题过程，而不是只做“输入题目、输出答案”的聊天机器人：系统会根据用户意图选择知识答疑、完整求解、步骤诊断、同类出题、学习规划或会话引导流程，并将课程知识库、题库、错题本和知识图谱关联起来。
 
 本仓库基于 [yishi170336/AI-Teaching-Assistant](https://github.com/yishi170336/AI-Teaching-Assistant) 的 `a5ff57b` 版本继续开发。新增能力和设计变化见 [与上游版本的差异](docs/UPSTREAM_CHANGES.md)。
 
@@ -27,6 +27,7 @@ LangGraph 总编排不会让所有输入机械执行同一条多智能体链：
 | `qa` | “为什么这个结果是这样”“我不理解叠加定理” | 单个上下文答疑 Agent 直接解释 |
 | `answer` | 完整题目、计算请求、学生步骤、验算或错因诊断 | 四智能体过程型解题链 |
 | `quiz` | “根据二极管知识出一道题” | 独立出题、校验与修正链 |
+| `plan` | “帮我安排一周复习计划”“如何补齐前置知识” | 学情提取、课程资料检索与可执行学习计划链 |
 | `chat` | 寒暄、离题内容、乱码、提示注入或信息不完整 | 会话引导 Agent，不检索、不建立题目状态 |
 
 四智能体解题链包括：
@@ -43,9 +44,10 @@ LangGraph 总编排不会让所有输入机械执行同一条多智能体链：
 - 教材与试卷自动分类；
 - PDF/Word/Markdown/TXT/Excel/JSON 导入；
 - 章节语义切分和页码、章节、知识点元数据保留；
-- 扫描 PDF 的 macOS Vision OCR 回退，以及外部 PDF-Extract-Kit、MinerU 或 Docling 适配边界；
+- 扫描 PDF 的 macOS Vision OCR 回退，以及外部 PDF-Extract-Kit、MinerU 或 Docling 适配边界；可选 Qwen 多模态清洗与图文嵌入；
 - 试卷题目候选抽取和结构化题库；
-- 向量检索、BM25、元数据过滤和规则重排；
+- 向量检索、BM25、元数据过滤和规则重排；默认本地 FAISS，可选 Qdrant 与 Neo4j；
+- 教材片段与题库分开索引，常规答疑只检索教材证据，题库只在明确出题流程中使用，避免标准答案意外泄露；
 - 题目与教材片段的 `supported_by` 关联；
 - 检索质量门控：题意不完整、知识点无证据或相关度不足时不展示引用；
 - 知识图谱内容经过 OCR 噪声过滤，基础定义可使用校核卡片替代不可靠公式 OCR。
@@ -60,10 +62,10 @@ LangGraph 总编排不会让所有输入机械执行同一条多智能体链：
 工作流         LangGraph
 本地模型       LM Studio / Ollama
 远程模型       DeepSeek / 通义千问 / OpenAI 兼容 API
-知识检索       SentenceTransformers + FAISS + BM25 + Jieba
+知识检索       SentenceTransformers + FAISS/Qdrant + BM25 + Jieba + 可选 Neo4j
 数学验证       SymPy
 会话存储       Redis；不可用时回退本地 JSON
-文档解析       PyMuPDF + python-docx + openpyxl + 可插拔 OCR 服务
+文档解析       PyMuPDF + python-docx + openpyxl + PDF-Extract-Kit/可插拔 OCR
 ```
 
 ## 快速开始
