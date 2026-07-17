@@ -21,12 +21,19 @@ from backend.app.agents.workflow import CircuitTutorEngine, _contextual_attachme
 from backend.app.config import settings
 from backend.app.rag.manager import KnowledgeBaseManager
 from backend.app.rag.multimodal import BuildModelConfig
-from backend.app.schemas import ChatRequest, KnowledgeBaseRebuildRequest, MistakeCreateRequest
+from backend.app.schemas import (
+    ChatRequest,
+    KnowledgeBaseRebuildRequest,
+    MistakeCreateRequest,
+    ScheduleItemCreateRequest,
+    ScheduleItemStatusRequest,
+)
 from backend.app.services.memory import ConversationMemory
 from backend.app.services.ollama_client import OllamaClient
 from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
 from backend.app.services.mistake_book import MistakeBook, related_mistake_context
+from backend.app.services.schedule import StudentSchedule
 from backend.app.services.model_catalog import (
     QWEN_MODELS,
     QWEN_MODEL_OPTIONS,
@@ -65,6 +72,7 @@ knowledge_bases = KnowledgeBaseManager()
 engine = CircuitTutorEngine(ollama, knowledge_bases)
 attachments = AttachmentStore()
 mistake_book = MistakeBook()
+student_schedule = StudentSchedule()
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -459,6 +467,49 @@ async def delete_mistake(mistake_id: str, student_id: str) -> dict[str, Any]:
         raise HTTPException(status_code=400, detail="错题标识不合法")
     if not await mistake_book.delete(student_id, mistake_id):
         raise HTTPException(status_code=404, detail="错题不存在")
+    return {"ok": True}
+
+
+@app.get("/api/schedule")
+async def list_schedule_items(student_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", student_id):
+        raise HTTPException(status_code=400, detail="学生标识不合法")
+    return {"items": await student_schedule.list(student_id)}
+
+
+@app.post("/api/schedule")
+async def add_schedule_item(payload: ScheduleItemCreateRequest) -> dict[str, Any]:
+    item = await student_schedule.add(
+        student_id=payload.student_id,
+        title=payload.title,
+        date=payload.date,
+        time=payload.time,
+        category=payload.category,
+        note=payload.note,
+    )
+    return {"ok": True, "item": item}
+
+
+@app.patch("/api/schedule/{item_id}")
+async def update_schedule_item_status(
+    item_id: str, payload: ScheduleItemStatusRequest
+) -> dict[str, Any]:
+    if not re.fullmatch(r"[a-f0-9]{32}", item_id):
+        raise HTTPException(status_code=400, detail="日程标识不合法")
+    item = await student_schedule.set_completed(payload.student_id, item_id, payload.completed)
+    if item is None:
+        raise HTTPException(status_code=404, detail="日程不存在")
+    return {"ok": True, "item": item}
+
+
+@app.delete("/api/schedule/{item_id}")
+async def delete_schedule_item(item_id: str, student_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", student_id) or not re.fullmatch(
+        r"[a-f0-9]{32}", item_id
+    ):
+        raise HTTPException(status_code=400, detail="日程标识不合法")
+    if not await student_schedule.delete(student_id, item_id):
+        raise HTTPException(status_code=404, detail="日程不存在")
     return {"ok": True}
 
 

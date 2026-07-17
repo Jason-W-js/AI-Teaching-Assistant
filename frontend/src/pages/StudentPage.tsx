@@ -21,9 +21,14 @@ import {
   Bot,
   BrainCircuit,
   BookmarkPlus,
+  CalendarCheck2,
+  CalendarDays,
   Check,
+  CheckCircle2,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  Circle,
   CircleStop,
   Cloud,
   Clock3,
@@ -36,6 +41,7 @@ import {
   Layers3,
   Network,
   LoaderCircle,
+  ListTodo,
   Menu,
   MessageSquareText,
   Plus,
@@ -54,14 +60,17 @@ import {
 import MathMarkdown from '../components/MathMarkdown'
 import {
   addMistake,
+  addScheduleItem,
   AttachmentInfo,
   cancelKnowledgeBaseBuild,
   deleteKnowledgeBase,
   deleteMistake,
+  deleteScheduleItem,
   deleteSession,
   fetchKnowledgeGraph,
   fetchKnowledgeBases,
   fetchMistakes,
+  fetchSchedule,
   fetchModels,
   fetchSession,
   fetchSessions,
@@ -72,15 +81,19 @@ import {
   ModelConfig,
   ModelProviderId,
   MistakeItem,
+  ScheduleCategory,
+  ScheduleItem,
+  ScheduleItemDraft,
   SessionSummary,
   SourceInfo,
+  setScheduleItemCompleted,
   uploadKnowledgeFile,
   rebuildKnowledgeBase,
 } from '../lib/api'
 import { CHAT_MODEL, CHAT_MODEL_PROVIDER, ChatMessage, ChatMode, useChatStore } from '../store/chatStore'
 
 const { TextArea } = Input
-type WorkspaceView = 'chat' | 'graph' | 'mistakes'
+type WorkspaceView = 'chat' | 'graph' | 'mistakes' | 'schedule'
 type MistakeDraft = {
   question: string
   answer: string
@@ -250,6 +263,10 @@ function Sidebar({
             <Layers3 size={17} />
             <span>错题本</span>
           </button>
+          <button className={`nav-item ${activeView === 'schedule' ? 'active' : ''}`} onClick={() => onView('schedule')}>
+            <CalendarDays size={17} />
+            <span>学习日历</span>
+          </button>
         </nav>
 
         <div className="recent-section">
@@ -314,7 +331,95 @@ function Sidebar({
   )
 }
 
-function Welcome({ onAsk }: { onAsk: (prompt: string, mode: ChatMode) => void }) {
+const scheduleCategoryLabels: Record<ScheduleCategory, string> = {
+  exam: '考试',
+  study: '学习',
+  activity: '活动',
+  other: '其他',
+}
+
+function localDateKey(date = new Date()) {
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function scheduleCategoryIcon(category: ScheduleCategory, size = 15) {
+  if (category === 'exam') return <GraduationCap size={size} />
+  if (category === 'activity') return <CalendarCheck2 size={size} />
+  if (category === 'other') return <ListTodo size={size} />
+  return <BookOpen size={size} />
+}
+
+function TodayAgenda({
+  items,
+  onOpen,
+  onToggle,
+}: {
+  items: ScheduleItem[]
+  onOpen: () => void
+  onToggle: (item: ScheduleItem) => void
+}) {
+  const today = new Date()
+  const pending = items.filter((item) => !item.completed).length
+  return (
+    <section className="today-agenda" aria-label="今日安排">
+      <div className="today-date-block">
+        <small>{today.toLocaleDateString('zh-CN', { month: 'short' })}</small>
+        <strong>{today.getDate()}</strong>
+        <span>{today.toLocaleDateString('zh-CN', { weekday: 'short' })}</span>
+      </div>
+      <div className="today-agenda-main">
+        <div className="today-agenda-head">
+          <div>
+            <span className="today-agenda-icon"><CalendarCheck2 size={17} /></span>
+            <strong>今日安排</strong>
+            {items.length > 0 && <small>{pending ? `${pending} 项待完成` : '今日计划已完成'}</small>}
+          </div>
+          <button type="button" onClick={onOpen}>查看日历 <ChevronRight size={14} /></button>
+        </div>
+        {items.length ? (
+          <div className="today-agenda-list">
+            {items.slice(0, 3).map((item) => (
+              <button
+                type="button"
+                className={`today-agenda-item category-${item.category} ${item.completed ? 'completed' : ''}`}
+                key={item.id}
+                onClick={() => onToggle(item)}
+                aria-label={`${item.completed ? '标记为未完成' : '标记为已完成'}：${item.title}`}
+              >
+                {item.completed ? <CheckCircle2 size={16} /> : <Circle size={16} />}
+                <span>
+                  <strong>{item.title}</strong>
+                  <small>{item.time || '全天'} · {scheduleCategoryLabels[item.category]}</small>
+                </span>
+              </button>
+            ))}
+            {items.length > 3 && <button className="today-agenda-more" type="button" onClick={onOpen}>还有 {items.length - 3} 项安排</button>}
+          </div>
+        ) : (
+          <button type="button" className="today-agenda-empty" onClick={onOpen}>
+            <span><Plus size={15} /></span>
+            <span><strong>今天还没有安排</strong><small>为考试、复习或活动留个位置</small></span>
+          </button>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function Welcome({
+  onAsk,
+  todaySchedule,
+  onOpenSchedule,
+  onToggleSchedule,
+}: {
+  onAsk: (prompt: string, mode: ChatMode) => void
+  todaySchedule: ScheduleItem[]
+  onOpenSchedule: () => void
+  onToggleSchedule: (item: ScheduleItem) => void
+}) {
   return (
     <div className="welcome-wrap">
       <div className="welcome-hero">
@@ -329,6 +434,7 @@ function Welcome({ onAsk }: { onAsk: (prompt: string, mode: ChatMode) => void })
           <h1>你好，今天想弄懂哪一道电路题？</h1>
         </div>
       </div>
+      <TodayAgenda items={todaySchedule} onOpen={onOpenSchedule} onToggle={onToggleSchedule} />
       <div className="quick-grid">
         {quickPrompts.map((item) => (
           <button key={item.title} className="quick-card" onClick={() => onAsk(item.title, item.mode)}>
@@ -1104,6 +1210,220 @@ function MistakeBookView({
   )
 }
 
+function ScheduleView({
+  items,
+  onAdd,
+  onToggle,
+  onDelete,
+}: {
+  items: ScheduleItem[]
+  onAdd: (draft: ScheduleItemDraft) => Promise<boolean>
+  onToggle: (item: ScheduleItem) => void
+  onDelete: (id: string) => void
+}) {
+  const todayKey = localDateKey()
+  const today = new Date()
+  const [visibleMonth, setVisibleMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1))
+  const [selectedDate, setSelectedDate] = useState(todayKey)
+  const [addOpen, setAddOpen] = useState(false)
+  const [adding, setAdding] = useState(false)
+  const [draft, setDraft] = useState<ScheduleItemDraft>({
+    title: '',
+    date: todayKey,
+    time: '',
+    category: 'study',
+    note: '',
+  })
+  const itemsByDate = useMemo(() => {
+    const grouped = new Map<string, ScheduleItem[]>()
+    items.forEach((item) => grouped.set(item.date, [...(grouped.get(item.date) || []), item]))
+    return grouped
+  }, [items])
+  const calendarDays = useMemo(() => {
+    const year = visibleMonth.getFullYear()
+    const month = visibleMonth.getMonth()
+    const mondayOffset = (new Date(year, month, 1).getDay() + 6) % 7
+    return Array.from({ length: 42 }, (_, index) => new Date(year, month, index - mondayOffset + 1))
+  }, [visibleMonth])
+  const selectedItems = itemsByDate.get(selectedDate) || []
+  const monthPrefix = `${visibleMonth.getFullYear()}-${String(visibleMonth.getMonth() + 1).padStart(2, '0')}`
+  const monthItems = items.filter((item) => item.date.startsWith(monthPrefix))
+  const monthPending = monthItems.filter((item) => !item.completed).length
+  const selectedDateObject = (() => {
+    const [year, month, day] = selectedDate.split('-').map(Number)
+    return new Date(year, month - 1, day)
+  })()
+
+  const openAdd = (date = selectedDate) => {
+    setDraft({ title: '', date, time: '', category: 'study', note: '' })
+    setAddOpen(true)
+  }
+
+  const submitDraft = async () => {
+    if (!draft.title.trim() || !draft.date) return
+    setAdding(true)
+    const added = await onAdd({ ...draft, title: draft.title.trim(), note: draft.note.trim() })
+    setAdding(false)
+    if (added) {
+      const [year, month] = draft.date.split('-').map(Number)
+      setSelectedDate(draft.date)
+      setVisibleMonth(new Date(year, month - 1, 1))
+      setAddOpen(false)
+    }
+  }
+
+  const changeMonth = (offset: number) => {
+    const next = new Date(visibleMonth.getFullYear(), visibleMonth.getMonth() + offset, 1)
+    setVisibleMonth(next)
+  }
+
+  const backToToday = () => {
+    const now = new Date()
+    setVisibleMonth(new Date(now.getFullYear(), now.getMonth(), 1))
+    setSelectedDate(localDateKey(now))
+  }
+
+  return (
+    <section className="feature-view schedule-view">
+      <div className="feature-heading schedule-feature-heading">
+        <div><span>STUDY PLANNER</span><h1>学习日历</h1><p>把考试、复习和校园活动放进日历，让每一天都心中有数。</p></div>
+        <Button type="primary" icon={<Plus size={16} />} onClick={() => openAdd()}>添加安排</Button>
+      </div>
+      <div className="schedule-overview">
+        <div className="schedule-overview-copy">
+          <span className="schedule-overview-icon"><CalendarCheck2 size={24} /></span>
+          <div><small>本月计划</small><strong>{monthItems.length ? `已经安排 ${monthItems.length} 件事` : '从一个小目标开始'}</strong><p>{monthPending ? `还有 ${monthPending} 项等待完成，按自己的节奏一步步来。` : monthItems.length ? '本月安排已全部完成，做得很好。' : '点击任意日期，即可添加考试、活动或学习任务。'}</p></div>
+        </div>
+        <div className="schedule-overview-progress">
+          <strong>{monthItems.length ? Math.round(((monthItems.length - monthPending) / monthItems.length) * 100) : 0}<small>%</small></strong>
+          <span>完成进度</span>
+        </div>
+      </div>
+      <div className="schedule-layout">
+        <div className="calendar-card">
+          <header className="calendar-toolbar">
+            <div>
+              <button type="button" onClick={() => changeMonth(-1)} aria-label="上个月"><ChevronLeft size={18} /></button>
+              <strong>{visibleMonth.getFullYear()}年 {visibleMonth.getMonth() + 1}月</strong>
+              <button type="button" onClick={() => changeMonth(1)} aria-label="下个月"><ChevronRight size={18} /></button>
+            </div>
+            <button className="calendar-today-button" type="button" onClick={backToToday}>回到今天</button>
+          </header>
+          <div className="calendar-weekdays" aria-hidden="true">
+            {['一', '二', '三', '四', '五', '六', '日'].map((day) => <span key={day}>周{day}</span>)}
+          </div>
+          <div className="calendar-grid">
+            {calendarDays.map((date) => {
+              const key = localDateKey(date)
+              const dayItems = itemsByDate.get(key) || []
+              const inMonth = date.getMonth() === visibleMonth.getMonth()
+              return (
+                <button
+                  type="button"
+                  key={key}
+                  className={`calendar-day ${inMonth ? '' : 'outside'} ${key === todayKey ? 'today' : ''} ${key === selectedDate ? 'selected' : ''}`}
+                  onClick={() => setSelectedDate(key)}
+                  onDoubleClick={() => openAdd(key)}
+                  aria-label={`${date.toLocaleDateString('zh-CN')}，${dayItems.length} 项安排`}
+                >
+                  <span className="calendar-day-number">{date.getDate()}</span>
+                  {dayItems.length > 0 && (
+                    <span className="calendar-day-events">
+                      <span className="calendar-event-dots">
+                        {dayItems.slice(0, 3).map((item) => <i className={`category-${item.category}`} key={item.id} />)}
+                      </span>
+                      <small>{dayItems[0].title}</small>
+                      {dayItems.length > 1 && <b>+{dayItems.length - 1}</b>}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        <aside className="day-schedule-panel">
+          <header>
+            <div>
+              <span>{selectedDate === todayKey ? '今天' : selectedDateObject.toLocaleDateString('zh-CN', { weekday: 'long' })}</span>
+              <h2>{selectedDateObject.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric' })}</h2>
+            </div>
+            <button type="button" onClick={() => openAdd()} aria-label="为所选日期添加安排"><Plus size={18} /></button>
+          </header>
+          {selectedItems.length ? (
+            <div className="day-schedule-list">
+              {selectedItems.map((item) => (
+                <article className={`day-schedule-item category-${item.category} ${item.completed ? 'completed' : ''}`} key={item.id}>
+                  <button type="button" className="schedule-check" onClick={() => onToggle(item)} aria-label={`${item.completed ? '恢复' : '完成'} ${item.title}`}>
+                    {item.completed ? <CheckCircle2 size={18} /> : <Circle size={18} />}
+                  </button>
+                  <span className="day-schedule-category">{scheduleCategoryIcon(item.category, 14)}</span>
+                  <div>
+                    <div><small>{item.time || '全天'} · {scheduleCategoryLabels[item.category]}</small></div>
+                    <strong>{item.title}</strong>
+                    {item.note && <p>{item.note}</p>}
+                  </div>
+                  <Popconfirm title="删除这项安排？" okText="删除" cancelText="取消" onConfirm={() => onDelete(item.id)}>
+                    <button type="button" className="schedule-delete" aria-label={`删除 ${item.title}`}><Trash2 size={14} /></button>
+                  </Popconfirm>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <button type="button" className="day-schedule-empty" onClick={() => openAdd()}>
+              <span><CalendarDays size={24} /></span>
+              <strong>这一天还是空白</strong>
+              <small>点击添加一项值得期待的安排</small>
+            </button>
+          )}
+          <div className="schedule-legend">
+            {(Object.keys(scheduleCategoryLabels) as ScheduleCategory[]).map((category) => <span key={category}><i className={`category-${category}`} />{scheduleCategoryLabels[category]}</span>)}
+          </div>
+        </aside>
+      </div>
+      <Modal
+        open={addOpen}
+        onCancel={() => setAddOpen(false)}
+        footer={null}
+        title={null}
+        width={500}
+        className="schedule-modal"
+      >
+        <div className="modal-heading schedule-modal-heading">
+          <span className="modal-icon"><CalendarCheck2 size={22} /></span>
+          <div><h2>添加新的安排</h2><p>记下重要的事，为当天留出时间。</p></div>
+        </div>
+        <div className="schedule-form">
+          <label>
+            <span>安排名称</span>
+            <Input value={draft.title} maxLength={120} autoFocus placeholder="例如：模拟电路期中考试" onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))} onPressEnter={() => void submitDraft()} />
+          </label>
+          <div className="schedule-form-row">
+            <label><span>日期</span><Input type="date" value={draft.date} onChange={(event) => setDraft((value) => ({ ...value, date: event.target.value }))} /></label>
+            <label><span>时间（可选）</span><Input type="time" value={draft.time} onChange={(event) => setDraft((value) => ({ ...value, time: event.target.value }))} /></label>
+          </div>
+          <label>
+            <span>类型</span>
+            <Select
+              value={draft.category}
+              onChange={(category) => setDraft((value) => ({ ...value, category }))}
+              options={(Object.keys(scheduleCategoryLabels) as ScheduleCategory[]).map((category) => ({ value: category, label: scheduleCategoryLabels[category] }))}
+              style={{ width: '100%' }}
+            />
+          </label>
+          <label>
+            <span>备注（可选）</span>
+            <TextArea value={draft.note} maxLength={500} autoSize={{ minRows: 3, maxRows: 5 }} placeholder="地点、需要携带的物品或提醒……" onChange={(event) => setDraft((value) => ({ ...value, note: event.target.value }))} />
+          </label>
+          <div className="schedule-form-actions">
+            <Button onClick={() => setAddOpen(false)}>取消</Button>
+            <Button type="primary" icon={<CalendarCheck2 size={16} />} loading={adding} disabled={!draft.title.trim() || !draft.date} onClick={() => void submitDraft()}>加入日历</Button>
+          </div>
+        </div>
+      </Modal>
+    </section>
+  )
+}
+
 function ModelSettingsModal({
   open,
   onClose,
@@ -1303,6 +1623,7 @@ function StudentPageContent() {
   const [knowledgeGraph, setKnowledgeGraph] = useState<KnowledgeGraph>()
   const [graphLoading, setGraphLoading] = useState(false)
   const [mistakes, setMistakes] = useState<MistakeItem[]>([])
+  const [scheduleItems, setScheduleItems] = useState<ScheduleItem[]>([])
   const studentId = useChatStore((state) => state.studentId)
   const messages = useChatStore((state) => state.messages)
   const sessionId = useChatStore((state) => state.sessionId)
@@ -1355,6 +1676,14 @@ function StudentPageContent() {
     }
   }
 
+  const refreshSchedule = async () => {
+    try {
+      setScheduleItems(await fetchSchedule(studentId))
+    } catch {
+      setScheduleItems([])
+    }
+  }
+
   const upsertBuildStatus = (state?: KBStatus) => {
     if (!state?.id) return
     setStatuses((current) => (
@@ -1386,6 +1715,7 @@ function StudentPageContent() {
     }).catch(() => undefined)
     void refreshSessions()
     void refreshMistakes()
+    void refreshSchedule()
     void refreshModels(true)
     const timer = window.setInterval(() => {
       void refreshStatuses()
@@ -1481,6 +1811,37 @@ function StudentPageContent() {
       toast.success('已从错题本删除')
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '删除错题失败')
+    }
+  }
+
+  const createScheduleItem = async (draft: ScheduleItemDraft) => {
+    try {
+      const item = await addScheduleItem(studentId, draft)
+      setScheduleItems((current) => [...current, item].sort((a, b) => `${a.date} ${a.time || '99:99'}`.localeCompare(`${b.date} ${b.time || '99:99'}`)))
+      toast.success('安排已加入日历')
+      return true
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '日程添加失败')
+      return false
+    }
+  }
+
+  const toggleScheduleItem = async (item: ScheduleItem) => {
+    try {
+      const updated = await setScheduleItemCompleted(studentId, item.id, !item.completed)
+      setScheduleItems((current) => current.map((existing) => existing.id === item.id ? updated : existing))
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '日程状态更新失败')
+    }
+  }
+
+  const removeScheduleItem = async (id: string) => {
+    try {
+      await deleteScheduleItem(studentId, id)
+      setScheduleItems((current) => current.filter((item) => item.id !== id))
+      toast.success('安排已删除')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '日程删除失败')
     }
   }
 
@@ -1626,6 +1987,11 @@ function StudentPageContent() {
     setNewKbName('')
   }
 
+  const todaySchedule = useMemo(
+    () => scheduleItems.filter((item) => item.date === localDateKey()),
+    [scheduleItems],
+  )
+
   return (
     <div className="student-app">
       <Sidebar
@@ -1645,7 +2011,7 @@ function StudentPageContent() {
             <button className="menu-button" onClick={() => setSidebarOpen(true)} aria-label="打开导航"><Menu size={19} /></button>
             <div>
               <span className="breadcrumb">学生工作台 /</span>
-              <strong>{activeView === 'graph' ? '知识图谱' : activeView === 'mistakes' ? '错题本' : mode === 'quiz' ? '同类题生成' : mode === 'answer' ? '课程答疑' : mode === 'plan' ? '学习规划' : '智能学习'}</strong>
+              <strong>{activeView === 'graph' ? '知识图谱' : activeView === 'mistakes' ? '错题本' : activeView === 'schedule' ? '学习日历' : mode === 'quiz' ? '同类题生成' : mode === 'answer' ? '课程答疑' : mode === 'plan' ? '学习规划' : '智能学习'}</strong>
             </div>
           </div>
           <div className="topbar-actions">
@@ -1699,7 +2065,14 @@ function StudentPageContent() {
           <section className="learning-grid">
             <div className="chat-column">
               <div className="chat-scroll">
-                {messages.length === 0 ? <Welcome onAsk={ask} /> : <Conversation onAddMistake={(draft) => void saveMistake(draft)} />}
+                {messages.length === 0 ? (
+                  <Welcome
+                    onAsk={ask}
+                    todaySchedule={todaySchedule}
+                    onOpenSchedule={() => setActiveView('schedule')}
+                    onToggleSchedule={(item) => void toggleScheduleItem(item)}
+                  />
+                ) : <Conversation onAddMistake={(draft) => void saveMistake(draft)} />}
               </div>
               <ChatComposer onSend={(value) => ask(value)} />
             </div>
@@ -1707,8 +2080,15 @@ function StudentPageContent() {
           </section>
         ) : activeView === 'graph' ? (
           <KnowledgeGraphView graph={knowledgeGraph} loading={graphLoading} />
-        ) : (
+        ) : activeView === 'mistakes' ? (
           <MistakeBookView mistakes={mistakes} onDelete={(id) => void removeMistake(id)} onPlan={planFromMistakes} />
+        ) : (
+          <ScheduleView
+            items={scheduleItems}
+            onAdd={createScheduleItem}
+            onToggle={(item) => void toggleScheduleItem(item)}
+            onDelete={(id) => void removeScheduleItem(id)}
+          />
         )}
       </main>
 

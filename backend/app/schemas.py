@@ -121,6 +121,68 @@ class MistakeCreateRequest(BaseModel):
         return self
 
 
+class ScheduleItemCreateRequest(BaseModel):
+    student_id: str = Field(min_length=1, max_length=96)
+    title: str = Field(min_length=1, max_length=120)
+    date: str = Field(min_length=10, max_length=10)
+    time: str = Field(default="", max_length=5)
+    category: Literal["exam", "study", "activity", "other"] = "study"
+    note: str = Field(default="", max_length=500)
+
+    @field_validator("student_id")
+    @classmethod
+    def safe_schedule_student_identifier(cls, value: str) -> str:
+        value = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", value):
+            raise ValueError("学生标识仅允许字母、数字、连字符和下划线")
+        return value
+
+    @field_validator("title", "note")
+    @classmethod
+    def strip_schedule_text(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("date")
+    @classmethod
+    def valid_schedule_date(cls, value: str) -> str:
+        from datetime import date
+
+        try:
+            date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("日期必须是有效的 YYYY-MM-DD") from exc
+        return value
+
+    @field_validator("time")
+    @classmethod
+    def valid_schedule_time(cls, value: str) -> str:
+        from datetime import time
+
+        value = value.strip()
+        if not value:
+            return ""
+        try:
+            time.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("时间必须是有效的 HH:MM") from exc
+        if not re.fullmatch(r"\d{2}:\d{2}", value):
+            raise ValueError("时间必须是有效的 HH:MM")
+        return value
+
+
+class ScheduleItemStatusRequest(BaseModel):
+    student_id: str = Field(min_length=1, max_length=96)
+    completed: bool
+
+    @field_validator("student_id")
+    @classmethod
+    def safe_schedule_status_student_identifier(cls, value: str) -> str:
+        value = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", value):
+            raise ValueError("学生标识仅允许字母、数字、连字符和下划线")
+        return value
+
+
 class KBStatus(BaseModel):
     id: str
     state: Literal["ready", "building", "error", "missing"]

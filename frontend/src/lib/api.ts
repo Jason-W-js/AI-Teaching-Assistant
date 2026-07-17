@@ -118,6 +118,23 @@ export type MistakeItem = {
   created_at: string
 }
 
+export type ScheduleCategory = 'exam' | 'study' | 'activity' | 'other'
+
+export type ScheduleItem = {
+  id: string
+  student_id: string
+  title: string
+  date: string
+  time: string
+  category: ScheduleCategory
+  note: string
+  completed: boolean
+  created_at: string
+  updated_at: string
+}
+
+export type ScheduleItemDraft = Pick<ScheduleItem, 'title' | 'date' | 'time' | 'category' | 'note'>
+
 export type SessionSummary = {
   session_id: string
   title: string
@@ -321,6 +338,52 @@ export async function deleteMistake(studentId: string, mistakeId: string): Promi
     { method: 'DELETE' },
   )
   if (!response.ok) throw new Error('删除错题失败')
+}
+
+export async function fetchSchedule(studentId: string): Promise<ScheduleItem[]> {
+  const response = await fetch(`/api/schedule?student_id=${encodeURIComponent(studentId)}`)
+  if (!response.ok) throw new Error('日程读取失败')
+  return (await response.json()).items || []
+}
+
+export async function addScheduleItem(
+  studentId: string,
+  draft: ScheduleItemDraft,
+): Promise<ScheduleItem> {
+  const response = await fetch('/api/schedule', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: studentId, ...draft }),
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.detail || result.error || '日程添加失败')
+  return result.item
+}
+
+export async function setScheduleItemCompleted(
+  studentId: string,
+  itemId: string,
+  completed: boolean,
+): Promise<ScheduleItem> {
+  const response = await fetch(`/api/schedule/${encodeURIComponent(itemId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: studentId, completed }),
+  })
+  const result = await response.json()
+  if (!response.ok) throw new Error(result.detail || result.error || '日程状态更新失败')
+  return result.item
+}
+
+export async function deleteScheduleItem(studentId: string, itemId: string): Promise<void> {
+  const response = await fetch(
+    `/api/schedule/${encodeURIComponent(itemId)}?student_id=${encodeURIComponent(studentId)}`,
+    { method: 'DELETE' },
+  )
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}))
+    throw new Error(result.detail || '日程删除失败')
+  }
 }
 
 export async function uploadKnowledgeFile(
