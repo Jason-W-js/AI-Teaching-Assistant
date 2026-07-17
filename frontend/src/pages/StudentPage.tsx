@@ -34,6 +34,7 @@ import {
   Clock3,
   Cpu,
   Database,
+  Download,
   FileText,
   ExternalLink,
   GraduationCap,
@@ -46,6 +47,7 @@ import {
   MessageSquareText,
   Plus,
   Paperclip,
+  Presentation,
   Search,
   KeyRound,
   ServerCog,
@@ -77,6 +79,7 @@ import {
   KBStatus,
   knowledgeBaseSourceUrl,
   KnowledgeGraph,
+  generateLearningPlanPpt,
   ModelCatalog,
   ModelConfig,
   ModelProviderId,
@@ -810,13 +813,41 @@ function mistakeDraftForAssistant(messages: ChatMessage[], index: number): Mista
 }
 
 function Conversation({ onAddMistake }: { onAddMistake: (draft: MistakeDraft) => void }) {
+  const { message: toast } = AntApp.useApp()
   const messages = useChatStore((state) => state.messages)
+  const sessionId = useChatStore((state) => state.sessionId)
   const streaming = useChatStore((state) => state.streaming)
   const stage = useChatStore((state) => state.stage)
   const stageAgent = useChatStore((state) => state.stageAgent)
   const activeMessageId = useChatStore((state) => state.activeMessageId)
   const activateMessage = useChatStore((state) => state.activateMessage)
   const endRef = useRef<HTMLDivElement>(null)
+  const [generatingPptId, setGeneratingPptId] = useState('')
+  const [generatedPptIds, setGeneratedPptIds] = useState<Set<string>>(() => new Set())
+
+  const downloadLearningPlanPpt = async (message: ChatMessage, index: number) => {
+    setGeneratingPptId(message.id)
+    try {
+      const topic = [...messages.slice(0, index)]
+        .reverse()
+        .find((item) => item.role === 'user')?.content || ''
+      const result = await generateLearningPlanPpt(sessionId, message.content, topic)
+      const url = URL.createObjectURL(result.blob)
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = result.filename
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+      setGeneratedPptIds((current) => new Set(current).add(message.id))
+      toast.success(result.slideCount ? `PPT 已生成，共 ${result.slideCount} 页` : 'PPT 已生成并开始下载')
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '学习规划 PPT 生成失败')
+    } finally {
+      setGeneratingPptId('')
+    }
+  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
@@ -916,6 +947,36 @@ function Conversation({ onAddMistake }: { onAddMistake: (draft: MistakeDraft) =>
                   <BookmarkPlus size={14} /> 加入错题本
                 </button>
               </div>
+            )}
+            {message.content
+              && message.role === 'assistant'
+              && !message.failed
+              && message.agent === '学习规划 Agent'
+              && !(streaming && index === messages.length - 1) && (
+              <section className={`learning-plan-ppt-card ${generatedPptIds.has(message.id) ? 'ready' : ''}`}>
+                <span className="learning-plan-ppt-icon"><Presentation size={22} /></span>
+                <div className="learning-plan-ppt-copy">
+                  <span className="learning-plan-ppt-eyebrow">PLAN TO DECK</span>
+                  <strong>{generatedPptIds.has(message.id) ? '学习规划 PPT 已就绪' : '生成学习规划 PPT'}</strong>
+                  <p>将本次目标、阶段任务与验收标准整理成高质量可编辑演示文稿。</p>
+                  <div className="learning-plan-ppt-tags">
+                    <span>16:9 宽屏</span><span>清晰路线图</span><span>可编辑内容</span>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="learning-plan-ppt-button"
+                  disabled={Boolean(generatingPptId)}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    void downloadLearningPlanPpt(message, index)
+                  }}
+                >
+                  {generatingPptId === message.id
+                    ? <><LoaderCircle className="spin" size={15} /> 正在生成</>
+                    : <><Download size={15} /> {generatedPptIds.has(message.id) ? '再次下载' : '生成并下载'}</>}
+                </button>
+              </section>
             )}
           </div>
         </div>

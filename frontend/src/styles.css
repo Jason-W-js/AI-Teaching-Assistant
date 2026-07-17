@@ -293,6 +293,25 @@ button { color: inherit; }
 .message-tools button:hover { color: #0f766e; background: #edf6f3; }
 .message-row.user .message-tools button { color: rgba(255,255,255,.76); }
 .message-row.user .message-tools button:hover { color: #fff; background: rgba(255,255,255,.12); }
+.learning-plan-ppt-card { position: relative; display: grid; grid-template-columns: 46px minmax(0, 1fr) auto; align-items: center; gap: 13px; margin-top: 18px; padding: 15px 15px 15px 14px; overflow: hidden; background: linear-gradient(135deg, #f5faf8 0%, #eef7f4 58%, #fff8ef 100%); border: 1px solid #cfe3de; border-radius: 15px; box-shadow: 0 10px 24px rgba(22,79,74,.07); }
+.learning-plan-ppt-card::before { position: absolute; top: -35px; right: 82px; width: 110px; height: 110px; content: ''; background: radial-gradient(circle, rgba(42,166,149,.1), transparent 68%); border-radius: 50%; pointer-events: none; }
+.learning-plan-ppt-card.ready { background: linear-gradient(135deg, #f1faf6, #e9f6f1 60%, #fff8ec); border-color: #b9dcd3; }
+.learning-plan-ppt-icon { position: relative; display: grid; place-items: center; width: 46px; height: 46px; color: #fff; background: linear-gradient(145deg, #0f766e, #0b5e5b); border-radius: 13px; box-shadow: 0 7px 16px rgba(15,118,110,.2); }
+.learning-plan-ppt-icon::after { position: absolute; right: -3px; bottom: -3px; width: 12px; height: 12px; content: ''; background: #e98268; border: 2px solid #f4faf7; border-radius: 50%; }
+.learning-plan-ppt-copy { min-width: 0; }
+.learning-plan-ppt-eyebrow { display: block; margin-bottom: 3px; color: #e06f55; font-family: Inter, ui-sans-serif, system-ui, sans-serif; font-size: 8px; font-weight: 900; letter-spacing: .13em; }
+.learning-plan-ppt-copy strong { display: block; color: #173f3e; font-size: 13px; line-height: 1.45; }
+.learning-plan-ppt-copy p { margin: 3px 0 7px; color: #66817d; font-size: 9px; line-height: 1.55; }
+.learning-plan-ppt-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.learning-plan-ppt-tags span { padding: 2px 6px; color: #53736f; background: rgba(255,255,255,.76); border: 1px solid #dceae6; border-radius: 999px; font-size: 8px; font-weight: 700; }
+.learning-plan-ppt-button { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 112px; min-height: 36px; padding: 8px 12px; color: #fff; cursor: pointer; background: #0f766e; border: 0; border-radius: 10px; box-shadow: 0 6px 14px rgba(15,118,110,.18); font-size: 10px; font-weight: 800; transition: transform .18s ease, background .18s ease, box-shadow .18s ease; }
+.learning-plan-ppt-button:hover:not(:disabled) { background: #0b655f; box-shadow: 0 8px 18px rgba(15,118,110,.23); transform: translateY(-1px); }
+.learning-plan-ppt-button:disabled { color: #d2e8e3; cursor: wait; background: #6ba49d; box-shadow: none; }
+@media (max-width: 700px) {
+  .learning-plan-ppt-card { grid-template-columns: 42px minmax(0, 1fr); }
+  .learning-plan-ppt-icon { width: 42px; height: 42px; }
+  .learning-plan-ppt-button { grid-column: 1 / -1; width: 100%; }
+}
 .message-agent { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: #385e5e; font-size: 11px; font-weight: 800; }
 .message-agent .ant-tag { margin: 0; padding: 1px 6px; color: #668985; background: #e9f2ef; font-size: 8px; line-height: 16px; }
 .thinking-placeholder { display: flex; align-items: center; gap: 10px; min-height: 40px; color: #7b9290; font-size: 11px; }

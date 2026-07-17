@@ -135,6 +135,12 @@ export type ScheduleItem = {
 
 export type ScheduleItemDraft = Pick<ScheduleItem, 'title' | 'date' | 'time' | 'category' | 'note'>
 
+export type GeneratedPresentation = {
+  blob: Blob
+  filename: string
+  slideCount: number
+}
+
 export type SessionSummary = {
   session_id: string
   title: string
@@ -383,6 +389,47 @@ export async function deleteScheduleItem(studentId: string, itemId: string): Pro
   if (!response.ok) {
     const result = await response.json().catch(() => ({}))
     throw new Error(result.detail || '日程删除失败')
+  }
+}
+
+function presentationFilename(disposition: string | null): string {
+  if (!disposition) return '学习规划.pptx'
+  const encoded = disposition.match(/filename\*=utf-8''([^;]+)/i)?.[1]
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded.replace(/^"|"$/g, ''))
+    } catch {
+      // Fall through to the regular filename form.
+    }
+  }
+  return disposition.match(/filename="?([^";]+)"?/i)?.[1]?.trim() || '学习规划.pptx'
+}
+
+export async function generateLearningPlanPpt(
+  sessionId: string,
+  content: string,
+  topic: string,
+): Promise<GeneratedPresentation> {
+  const response = await fetch('/api/learning-plan/ppt', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ session_id: sessionId, content, topic }),
+  })
+  if (!response.ok) {
+    const raw = await response.text()
+    let detail = raw
+    try {
+      const parsed = JSON.parse(raw)
+      detail = parsed.detail || parsed.error || raw
+    } catch {
+      // Keep the plain-text response.
+    }
+    throw new Error(detail || '学习规划 PPT 生成失败')
+  }
+  return {
+    blob: await response.blob(),
+    filename: presentationFilename(response.headers.get('Content-Disposition')),
+    slideCount: Number(response.headers.get('X-Slide-Count') || 0),
   }
 }
 

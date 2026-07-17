@@ -183,6 +183,25 @@ class ScheduleItemStatusRequest(BaseModel):
         return value
 
 
+class LearningPlanPptRequest(BaseModel):
+    session_id: str = Field(min_length=1, max_length=96)
+    content: str = Field(min_length=20, max_length=60000)
+    topic: str = Field(default="", max_length=500)
+
+    @field_validator("session_id")
+    @classmethod
+    def safe_learning_plan_session_identifier(cls, value: str) -> str:
+        value = value.strip()
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,96}", value):
+            raise ValueError("会话标识仅允许字母、数字、连字符和下划线")
+        return value
+
+    @field_validator("content", "topic")
+    @classmethod
+    def strip_learning_plan_fields(cls, value: str) -> str:
+        return value.strip()
+
+
 class KBStatus(BaseModel):
     id: str
     state: Literal["ready", "building", "error", "missing"]

@@ -24,6 +24,7 @@ from backend.app.rag.multimodal import BuildModelConfig
 from backend.app.schemas import (
     ChatRequest,
     KnowledgeBaseRebuildRequest,
+    LearningPlanPptRequest,
     MistakeCreateRequest,
     ScheduleItemCreateRequest,
     ScheduleItemStatusRequest,
@@ -34,6 +35,10 @@ from backend.app.services.openai_compatible_client import OpenAICompatibleClient
 from backend.app.services.attachments import ALLOWED_ATTACHMENT_SUFFIXES, AttachmentStore
 from backend.app.services.mistake_book import MistakeBook, related_mistake_context
 from backend.app.services.schedule import StudentSchedule
+from backend.app.services.learning_plan_ppt import (
+    generate_learning_plan_ppt,
+    presentation_filename,
+)
 from backend.app.services.model_catalog import (
     QWEN_MODELS,
     QWEN_MODEL_OPTIONS,
@@ -96,6 +101,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["Content-Disposition", "X-Slide-Count"],
 )
 
 
@@ -511,6 +517,26 @@ async def delete_schedule_item(item_id: str, student_id: str) -> dict[str, Any]:
     if not await student_schedule.delete(student_id, item_id):
         raise HTTPException(status_code=404, detail="日程不存在")
     return {"ok": True}
+
+
+@app.post("/api/learning-plan/ppt")
+async def create_learning_plan_ppt(payload: LearningPlanPptRequest) -> FileResponse:
+    path, title, slide_count = await asyncio.to_thread(
+        generate_learning_plan_ppt,
+        settings.root_dir,
+        payload.session_id,
+        payload.content,
+        payload.topic,
+    )
+    return FileResponse(
+        path,
+        media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        filename=presentation_filename(title),
+        headers={
+            "Cache-Control": "private, max-age=3600",
+            "X-Slide-Count": str(slide_count),
+        },
+    )
 
 
 def select_model_client(payload: ChatRequest) -> tuple[Any, bool]:
