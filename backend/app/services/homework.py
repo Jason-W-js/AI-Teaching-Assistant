@@ -166,6 +166,26 @@ def _compose_labeled_text(stem: Any, parts: Any) -> str:
     return "\n".join(lines).strip()
 
 
+_FIGURE_REFERENCE_PATTERN = re.compile(
+    r"图\s*(\d+(?:\s*[.\-]\s*\d+)*(?:\s*[（(]\s*[A-Za-z0-9]+\s*[）)])?)",
+    re.IGNORECASE,
+)
+
+
+def _infer_figure_captions(*values: Any) -> list[str]:
+    """Infer printed figure labels such as 图1.3 from question text for legacy data."""
+    captions: list[str] = []
+    text_parts = [_clean_text(value) for value in values]
+    text = "\n".join(value for value in text_parts if value)
+    for match in _FIGURE_REFERENCE_PATTERN.finditer(text):
+        identifier = re.sub(r"\s+", "", match.group(1))
+        identifier = identifier.replace("(", "（").replace(")", "）")
+        caption = f"图{identifier}"
+        if caption not in captions:
+            captions.append(caption)
+    return captions
+
+
 def _option_columns(value: Any) -> int:
     columns = int(_as_float(value, 1))
     return columns if columns in {1, 2, 4} else 1
@@ -336,6 +356,12 @@ class HomeworkStore:
             for item in question.get("figures", [])
             if isinstance(item, dict) and item.get("file")
         ]
+        inferred_captions = _infer_figure_captions(
+            _compose_labeled_text(result.get("prompt"), result.get("subquestions"))
+        )
+        for index, figure in enumerate(result["figures"]):
+            if not _clean_text(figure.get("caption"), 160) and index < len(inferred_captions):
+                figure["caption"] = inferred_captions[index]
         if include_answers:
             result["answer"] = str(question.get("answer", ""))
             result["answer_subquestions"] = _normalize_labeled_parts(
@@ -771,7 +797,7 @@ def _page_prompt(
 8. question_text 只能转录当前页面肉眼可见的题干，不得从“最近已出现的题目”复制、改写或补全题干。若当前页只有上一题的题图、答案或评分过程，question_text 必须为空。
 9. 使用 Markdown + LaTeX。所有电路变量、下标、希腊字母、单位和算式都必须放在 $...$ 中，例如 $\\beta=150$、$V_{{T}}=26\\,\\mathrm{{mV}}$、$V_{{BE(on)}}=0.7\\,\\mathrm{{V}}$、$r'_{{bb}}=100\\,\\Omega$、$R_{{B1}}=60\\,\\mathrm{{k}}\\Omega$、$A_{{v1}}=v_o/v_i$。禁止输出裸露的 V_T、R_B1、r_bb'、26mV 或 4kΩ。
 10. 已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。section_key 是大题、章节或习题组编号，section_title 是对应标题；没有明确分值时 points 返回 0。option_columns 按原页选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
-11. question_bboxes 只框题干与小问；figure_bboxes 必须单独精确框出题目引用的电路图、波形图或表格。答案中新增的推导图、页眉装饰图不要放入题目 figure_bboxes。
+11. question_bboxes 只框题干与小问；figure_bboxes 必须单独精确框出题目引用的电路图、波形图或表格，不要把图号文字裁进图中。figure_captions 与 figure_bboxes 按顺序一一对应，只填写原文图号/图注，例如“图1.3”；即使图号只出现在“如图1.3所示”的题干引用中，也必须返回“图1.3”。答案中新增的推导图、页眉装饰图不要放入题目 figure_bboxes。
 12. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、“解：”之后的过程和评分说明；rubric 只保留明确的评分点。
 13. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。
 
@@ -783,7 +809,7 @@ PDF-Extract-Kit 检测区域：
 {json.dumps(regions, ensure_ascii=False)}
 
 仅返回 JSON：
-{{"items":[{{"question_key":"1.4-1.2.1","section_key":"1.4","section_title":"1.4 习题解答","number":"1.2.1","question_type":"choice|calculation|short_answer|design|other","question_text":"所有小问共享的题干","subquestions":[{{"label":"1","text":"第一个小问"}},{{"label":"2","text":"第二个小问"}}],"options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"所有小问共享的答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}},{{"label":"2","text":"第二问答案"}}],"rubric":"明确评分点"}}],"warnings":[]}}。"""
+{{"items":[{{"question_key":"1.4-1.2.1","section_key":"1.4","section_title":"1.4 习题解答","number":"1.2.1","question_type":"choice|calculation|short_answer|design|other","question_text":"所有小问共享的题干","subquestions":[{{"label":"1","text":"第一个小问"}},{{"label":"2","text":"第二个小问"}}],"options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"figure_captions":["图1.3"],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"所有小问共享的答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}},{{"label":"2","text":"第二问答案"}}],"rubric":"明确评分点"}}],"warnings":[]}}。"""
 
 
 def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict[str, Any]]:
@@ -812,6 +838,12 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             answer_text = parsed_answer_text
         elif not answer_subquestions:
             answer_text, answer_subquestions = parsed_answer_text, parsed_answer_subquestions
+        raw_figure_captions = raw.get("figure_captions", [])
+        figure_captions = (
+            [_clean_text(caption, 160) for caption in raw_figure_captions]
+            if isinstance(raw_figure_captions, list)
+            else []
+        )
         result.append({
             "question_key": key,
             "section_key": _clean_text(raw.get("section_key", ""), 40),
@@ -826,6 +858,7 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             "points": max(0.0, _as_float(raw.get("points"))),
             "question_bboxes": _field_bboxes(raw, "question_bboxes", "question_bbox"),
             "figure_bboxes": _field_bboxes(raw, "figure_bboxes", "figure_bbox"),
+            "figure_captions": figure_captions,
             "answer_bboxes": _field_bboxes(raw, "answer_bboxes", "answer_bbox"),
             "answer_text": answer_text,
             "answer_subquestions": answer_subquestions,
@@ -1037,6 +1070,12 @@ def _save_question_assets(
         page = pages.get(int(segment["page"]))
         if not page:
             continue
+        explicit_captions = segment.get("figure_captions", [])
+        if not isinstance(explicit_captions, list):
+            explicit_captions = []
+        inferred_captions = _infer_figure_captions(
+            _compose_labeled_text(segment.get("question_text"), segment.get("subquestions"))
+        )
         with Image.open(page["path"]) as source_image:
             image = source_image.convert("RGB")
             width, height = image.size
@@ -1065,7 +1104,7 @@ def _save_question_assets(
                     f"{segment_index:02d}-{figure_index:02d}.png"
                 )
                 figure_crop.save(assets_dir / figure_name, format="PNG", optimize=True)
-                figures.append({
+                figure_asset = {
                     "file": figure_name,
                     "page": segment["page"],
                     "width": figure_crop.width,
@@ -1073,7 +1112,18 @@ def _save_question_assets(
                     "source_top": figure_bbox[1],
                     "source_left": figure_bbox[0],
                     "position": segment.get("figure_position", "after_question"),
-                })
+                }
+                caption_index = figure_index - 1
+                caption = (
+                    _clean_text(explicit_captions[caption_index], 160)
+                    if caption_index < len(explicit_captions)
+                    else ""
+                )
+                if not caption and caption_index < len(inferred_captions):
+                    caption = inferred_captions[caption_index]
+                if caption:
+                    figure_asset["caption"] = caption
+                figures.append(figure_asset)
     return [], figures
 
 

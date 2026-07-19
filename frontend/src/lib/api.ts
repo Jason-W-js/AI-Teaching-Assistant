@@ -162,6 +162,7 @@ export type HomeworkSubmissionStatus = 'grading' | 'graded' | 'review_required' 
 export type HomeworkAsset = {
   file: string
   name?: string
+  caption?: string
   url: string
   page?: number
   width?: number

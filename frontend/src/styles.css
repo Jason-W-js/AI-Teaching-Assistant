@@ -841,6 +841,7 @@ button { color: inherit; }
 .homework-paper-figures.count-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .homework-paper-figures figure { max-width: 100%; margin: 0; }
 .homework-paper-figures img { max-width: min(100%, 620px); max-height: 360px; display: block; object-fit: contain; }
+.homework-paper-figures figcaption { margin-top: 7px; color: #455652; font-family: "Noto Serif SC", "Songti SC", SimSun, serif; font-size: 11px; line-height: 1.45; text-align: center; }
 .homework-paper-points { position: absolute; top: 9px; right: 0; color: #65736f; font-size: 10px; }
 .homework-paper-answer { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) 52px; gap: 5px; padding: 11px 0 14px; break-inside: avoid; }
 .homework-paper-answer.has-long-number { grid-template-columns: 58px minmax(0, 1fr) 52px; }

@@ -70,7 +70,8 @@ function QuestionFigures({ figures, label }: { figures: HomeworkAsset[]; label: 
     <div className={`homework-paper-figures count-${Math.min(figures.length, 3)}`}>
       {figures.map((figure, index) => (
         <figure key={figure.file}>
-          <img src={figure.url} alt={`${label}题图 ${index + 1}`} />
+          <img src={figure.url} alt={figure.caption || `${label}题图 ${index + 1}`} />
+          {figure.caption && <figcaption>{figure.caption}</figcaption>}
         </figure>
       ))}
     </div>

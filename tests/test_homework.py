@@ -10,6 +10,7 @@ from backend.app.services.homework import (
     _choice_recovery_prompt,
     _consolidate_question_keys,
     _grading_reference,
+    _infer_figure_captions,
     _merge_prompt_parts,
     _native_inline_answer_bboxes,
     _normalized_page_items,
@@ -70,6 +71,7 @@ def extracted_homework(store: HomeworkStore) -> tuple[str, str]:
                     "points": 10,
                     "question_bboxes": [[50, 50, 950, 600]],
                     "figure_bboxes": [[120, 320, 430, 520]],
+                    "figure_captions": ["图1.3"],
                     "answer_bboxes": [[450, 150, 650, 250]],
                     "answer_text": "I = 2 mA",
                     "rubric": "公式 4 分，结果 6 分",
@@ -102,6 +104,7 @@ def test_extraction_reflows_text_and_keeps_only_independent_question_figures(tmp
     assert teacher["questions"][0]["figure_position"] == "after_question"
     assert teacher["questions"][0]["layout_images"] == []
     assert teacher["questions"][0]["figures"]
+    assert teacher["questions"][0]["figures"][0]["caption"] == "图1.3"
     assert store.list_homeworks(role="student", student_id="learner-test") == []
 
     figure = store.asset_file(homework_id, teacher["questions"][0]["figures"][0]["file"])
@@ -122,6 +125,23 @@ def test_extraction_reflows_text_and_keeps_only_independent_question_figures(tmp
     assert "answer" not in student["questions"][0]
     assert "rubric" not in student["questions"][0]
     assert "source_url" not in student
+
+
+def test_legacy_question_figures_infer_labels_from_question_text(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    question = {
+        "prompt": "图1.3所示电路与图 4-2（a）中的电路等效。",
+        "subquestions": [],
+        "figures": [{"file": "figure-1.png"}, {"file": "figure-2.png"}],
+    }
+
+    public = store._public_question("legacy-homework", question, include_answers=False)
+
+    assert _infer_figure_captions(question["prompt"]) == ["图1.3", "图4-2（a）"]
+    assert [figure["caption"] for figure in public["figures"]] == [
+        "图1.3",
+        "图4-2（a）",
+    ]
 
 
 def test_submission_is_graded_then_independently_reviewed(tmp_path):
@@ -446,6 +466,8 @@ def test_page_prompt_filters_book_explanations_and_requires_structured_subquesti
     assert "返回空 items" in prompt
     assert "question_text 与 subquestions" in prompt
     assert "answer_text 与 answer_subquestions" in prompt
+    assert "figure_captions 与 figure_bboxes" in prompt
+    assert '"figure_captions":["图1.3"]' in prompt
     assert "题目卷" not in prompt
 
 
