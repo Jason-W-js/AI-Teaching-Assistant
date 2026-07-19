@@ -95,6 +95,77 @@ def _normalize_options(value: Any) -> list[dict[str, str]]:
     return result
 
 
+def _part_label(value: Any) -> str:
+    label = _clean_text(value, 24)
+    label = re.sub(r"^[（(\[]\s*|\s*[）)\]]$", "", label)
+    return re.sub(r"[.、：:]$", "", label).strip()
+
+
+def _normalize_labeled_parts(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for index, part in enumerate(value):
+        if isinstance(part, dict):
+            label = _part_label(part.get("label", part.get("number", "")))
+            text = _clean_text(part.get("text", part.get("content", "")))
+        else:
+            label = str(index + 1)
+            text = _clean_text(part)
+        if text:
+            result.append({"label": label or str(index + 1), "text": text})
+    return result
+
+
+_NUMBERED_PART_PATTERN = re.compile(r"(?<![\w$])(?:\(|（)\s*(\d{1,2})\s*(?:\)|）)")
+
+
+def _split_labeled_text(value: Any) -> tuple[str, list[dict[str, str]]]:
+    """Split legacy inline (1)/(2)/(3) text without treating later references as new parts."""
+    text = _clean_text(value)
+    if not text:
+        return "", []
+    accepted: list[re.Match[str]] = []
+    expected = 1
+    for match in _NUMBERED_PART_PATTERN.finditer(text):
+        number = int(match.group(1))
+        if number == expected:
+            accepted.append(match)
+            expected += 1
+    if not accepted or int(accepted[0].group(1)) != 1:
+        return text, []
+    stem = text[:accepted[0].start()].strip()
+    parts: list[dict[str, str]] = []
+    for index, match in enumerate(accepted):
+        end = accepted[index + 1].start() if index + 1 < len(accepted) else len(text)
+        part_text = text[match.end():end].strip()
+        if part_text:
+            parts.append({"label": match.group(1), "text": part_text})
+    return stem, parts
+
+
+def _merge_labeled_parts(parts: Iterable[dict[str, str]]) -> list[dict[str, str]]:
+    grouped: dict[str, list[str]] = {}
+    for part in parts:
+        label = _part_label(part.get("label"))
+        text = _clean_text(part.get("text"))
+        if label and text:
+            grouped.setdefault(label, []).append(text)
+    result: list[dict[str, str]] = []
+    for label, texts in grouped.items():
+        merged_text = _merge_prompt_parts(texts)
+        if merged_text:
+            result.append({"label": label, "text": merged_text})
+    return result
+
+
+def _compose_labeled_text(stem: Any, parts: Any) -> str:
+    lines = [_clean_text(stem)] if _clean_text(stem) else []
+    for part in _normalize_labeled_parts(parts):
+        lines.append(f"({part['label']}) {part['text']}")
+    return "\n".join(lines).strip()
+
+
 def _option_columns(value: Any) -> int:
     columns = int(_as_float(value, 1))
     return columns if columns in {1, 2, 4} else 1
@@ -245,13 +316,14 @@ class HomeworkStore:
             key: question.get(key)
             for key in (
                 "id", "section_key", "section_title", "number", "question_type",
-                "prompt", "options", "option_columns", "figure_position", "points",
+                "prompt", "subquestions", "options", "option_columns", "figure_position", "points",
                 "page_start", "page_end", "sequence",
             )
         }
         result["section_key"] = result.get("section_key") or "questions"
         result["section_title"] = result.get("section_title") or "题目"
         result["options"] = _normalize_options(result.get("options"))
+        result["subquestions"] = _normalize_labeled_parts(result.get("subquestions"))
         result["option_columns"] = _option_columns(result.get("option_columns"))
         result["figure_position"] = _figure_position(result.get("figure_position"))
         result["layout_images"] = [
@@ -266,6 +338,9 @@ class HomeworkStore:
         ]
         if include_answers:
             result["answer"] = str(question.get("answer", ""))
+            result["answer_subquestions"] = _normalize_labeled_parts(
+                question.get("answer_subquestions")
+            )
             result["rubric"] = str(question.get("rubric", ""))
         return result
 
@@ -679,21 +754,26 @@ def _normalized_regions(
 def _page_prompt(
     page: dict[str, Any], regions: list[dict[str, Any]], previous_items: list[dict[str, Any]]
 ) -> str:
-    return f"""你是高校电路课程作业拆分器。当前是附件第 {page['page']} 页。
-目标：把原卷结构化拆成可重新排版的题目卷和答案卷。只提取章节标题、题号、题干、选项、题目所对应的图、标准答案和评分标准，并精确区分题干与答案。不要把整页或题干截图当作学生题面。
+    return f"""你是高校电路课程作业内容提取器。当前是附件第 {page['page']} 页。附件可能是试卷、课后习题、习题册、学习指导书或扫描图片。
+目标：只提取可直接布置给学生的独立题目，以及与每道题对应的参考答案。最终内容需要重新排版，不得把整页或题干截图当作学生题面。
 
 坐标要求：所有 bbox 使用当前整页图片的归一化坐标 [left,top,right,bottom]，范围 0-1000。
-拆分规则：
-1. question_key 必须在整份附件内唯一且稳定，例如“一-18”“二-2”“三-1”；key 后缀必须与页面印刷的顶层题号 number 一致。跨页连续题号（如上一页 3、本页 4）必须保持相同章节前缀；跨页续题沿用原 question_key，新题即使版式相似也绝不能复用上一题 key。
-2. question_type 是原卷的客观事实，不得改题型。大题标明“选择题”时，其下每题必须是 choice；横线中已印有 A/B/C/D 是答案标记，不代表填空题。
-3. choice 题必须完整返回页面上的 A/B/C/D 选项，放入 options，question_text 不包含选项。选项在下一页顶部续排时，即使本页没有重复题干，也要用原 question_key 返回一个 question_text 为空、但 options 完整的续接片段。
-4. question_text 只能转录当前页面肉眼可见的题干，不得从“最近已出现的题目”复制、改写或补全题干。若当前页只有上一题的题图、答案或评分过程，question_text 必须为空。
-5. 保留原卷换行和小问层级，使用 Markdown + LaTeX。所有电路变量、下标、希腊字母、单位和算式都必须放在 $...$ 中，例如 $\\beta=150$、$V_{{T}}=26\\,\\mathrm{{mV}}$、$V_{{BE(on)}}=0.7\\,\\mathrm{{V}}$、$r'_{{bb}}=100\\,\\Omega$、$R_{{B1}}=60\\,\\mathrm{{k}}\\Omega$、$A_{{v1}}=v_o/v_i$。禁止输出裸露的 V_T、R_B1、r_bb'、26mV 或 4kΩ。
-6. 已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。section_key 是大题编号，section_title 是完整大题标题及计分说明；option_columns 按原卷选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
-7. question_bboxes 只用于定位题干，不会作为最终学生题面；figure_bboxes 必须单独精确框出该题真正引用的电路图、波形图或表格。
-8. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、‘解：’之后的过程、评分说明；answer_text 保留标准答案与关键步骤，rubric 保留分值与评分点。
-9. 只有答案、没有新题干的页面片段，也要归入对应 question_key，但 question_bboxes 可为空。
-10. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。封面、考试说明、页眉页脚不要作为题目。
+内容筛选规则：
+1. 只返回有明确题号或例题号、并包含提问/计算/证明/设计/选择等作答要求的独立题目。习题、练习题、思考题、自测题以及带完整题号和作答要求的例题都可以提取。
+2. 必须忽略目录、前言、版权出版信息、教学要求、基本知识点、概念讲解、定理公式说明、例题之间的分析性过渡文字、章节总结、页眉页脚、广告、二维码和下载说明。不得把“解题方法介绍”或普通知识段落伪造成题目。若本页没有题目或题目答案，返回空 items。
+3. “习题解答/参考答案”页面常把题干和“解：”放在一起：question_text 与 subquestions 只放题目，answer_text 与 answer_subquestions 只放解答。只有答案续页时沿用原 question_key，question_text 为空。
+
+题目拆分规则：
+4. question_key 必须在整份附件内唯一且稳定，例如“一-18”“二-2”“1.4-1.2.3”“例题-1.3.1”；number 必须忠实保留页面印刷的完整题号。跨页续题沿用原 question_key，新题即使版式相似也绝不能复用上一题 key。
+5. question_type 是附件的客观事实，不得改题型。大题标明“选择题”时，其下每题必须是 choice；横线中已印有 A/B/C/D 是答案标记，不代表填空题。
+6. choice 题必须完整返回页面上的 A/B/C/D 选项，放入 options，question_text 不包含选项。选项在下一页顶部续排时，即使本页没有重复题干，也要用原 question_key 返回一个 question_text 为空、但 options 完整的续接片段。
+7. 多小问题必须结构化：question_text 只放所有小问共享的题干；每个“(1)/(2)/(3)”分别放入 subquestions，label 只写数字，text 不重复括号和共同题干。不要把多个小问挤在 question_text 的同一段。答案也用 answer_text + answer_subquestions 对齐拆分。subquestions 只能来自“解：/答案”之前实际印刷的提问；“解：”之后的假设、推导、分步计算即使也标有 (1)/(2)/(3)，只能进入 answer_subquestions，绝不能进入 subquestions 或泄露给学生。
+8. question_text 只能转录当前页面肉眼可见的题干，不得从“最近已出现的题目”复制、改写或补全题干。若当前页只有上一题的题图、答案或评分过程，question_text 必须为空。
+9. 使用 Markdown + LaTeX。所有电路变量、下标、希腊字母、单位和算式都必须放在 $...$ 中，例如 $\\beta=150$、$V_{{T}}=26\\,\\mathrm{{mV}}$、$V_{{BE(on)}}=0.7\\,\\mathrm{{V}}$、$r'_{{bb}}=100\\,\\Omega$、$R_{{B1}}=60\\,\\mathrm{{k}}\\Omega$、$A_{{v1}}=v_o/v_i$。禁止输出裸露的 V_T、R_B1、r_bb'、26mV 或 4kΩ。
+10. 已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。section_key 是大题、章节或习题组编号，section_title 是对应标题；没有明确分值时 points 返回 0。option_columns 按原页选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
+11. question_bboxes 只框题干与小问；figure_bboxes 必须单独精确框出题目引用的电路图、波形图或表格。答案中新增的推导图、页眉装饰图不要放入题目 figure_bboxes。
+12. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、“解：”之后的过程和评分说明；rubric 只保留明确的评分点。
+13. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。
 
 最近已出现的题目（用于判断跨页续接，不得覆盖页面上的新题号）：{json.dumps(previous_items[-12:], ensure_ascii=False)}
 PDF 原生文本（可能为空或错序）：
@@ -703,7 +783,7 @@ PDF-Extract-Kit 检测区域：
 {json.dumps(regions, ensure_ascii=False)}
 
 仅返回 JSON：
-{{"items":[{{"question_key":"二-1","section_key":"二","section_title":"二、计算题（共45分）","number":"1","question_type":"choice|calculation|short_answer|design|other","question_text":"不含答案和选项的完整题干或本页续接部分","options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":10,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"标准答案/本页答案续接","rubric":"评分点"}}],"warnings":[]}}。"""
+{{"items":[{{"question_key":"1.4-1.2.1","section_key":"1.4","section_title":"1.4 习题解答","number":"1.2.1","question_type":"choice|calculation|short_answer|design|other","question_text":"所有小问共享的题干","subquestions":[{{"label":"1","text":"第一个小问"}},{{"label":"2","text":"第二个小问"}}],"options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"所有小问共享的答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}},{{"label":"2","text":"第二问答案"}}],"rubric":"明确评分点"}}],"warnings":[]}}。"""
 
 
 def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict[str, Any]]:
@@ -718,13 +798,28 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
         number = _clean_text(raw.get("number", key), 80)
         if not key:
             continue
+        question_text = _clean_text(raw.get("question_text", raw.get("prompt", "")))
+        subquestions = _normalize_labeled_parts(raw.get("subquestions", []))
+        parsed_question_text, parsed_subquestions = _split_labeled_text(question_text)
+        if subquestions and parsed_subquestions:
+            question_text = parsed_question_text
+        elif not subquestions:
+            question_text, subquestions = parsed_question_text, parsed_subquestions
+        answer_text = _clean_text(raw.get("answer_text", raw.get("answer", "")))
+        answer_subquestions = _normalize_labeled_parts(raw.get("answer_subquestions", []))
+        parsed_answer_text, parsed_answer_subquestions = _split_labeled_text(answer_text)
+        if answer_subquestions and parsed_answer_subquestions:
+            answer_text = parsed_answer_text
+        elif not answer_subquestions:
+            answer_text, answer_subquestions = parsed_answer_text, parsed_answer_subquestions
         result.append({
             "question_key": key,
             "section_key": _clean_text(raw.get("section_key", ""), 40),
             "section_title": _clean_text(raw.get("section_title", ""), 240),
             "number": number or key,
             "question_type": _question_type(raw.get("question_type")),
-            "question_text": _clean_text(raw.get("question_text", raw.get("prompt", ""))),
+            "question_text": question_text,
+            "subquestions": subquestions,
             "options": _normalize_options(raw.get("options", [])),
             "option_columns": _option_columns(raw.get("option_columns")),
             "figure_position": _figure_position(raw.get("figure_position")),
@@ -732,7 +827,8 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             "question_bboxes": _field_bboxes(raw, "question_bboxes", "question_bbox"),
             "figure_bboxes": _field_bboxes(raw, "figure_bboxes", "figure_bbox"),
             "answer_bboxes": _field_bboxes(raw, "answer_bboxes", "answer_bbox"),
-            "answer_text": _clean_text(raw.get("answer_text", raw.get("answer", ""))),
+            "answer_text": answer_text,
+            "answer_subquestions": answer_subquestions,
             "rubric": _clean_text(raw.get("rubric", raw.get("scoring", ""))),
             "page": page_number,
         })
@@ -834,22 +930,26 @@ def _consolidate_question_keys(
             "printed_number": item["number"],
             "current_points": item.get("points", 0),
             "question_type": item["question_type"],
-            "text_start": item["question_text"][:900],
+            "text_start": _compose_labeled_text(
+                item["question_text"], item.get("subquestions")
+            )[:900],
             "has_question_bbox": bool(item["question_bboxes"]),
             "has_answer_bbox": bool(item["answer_bboxes"]),
         }
         for index, item in enumerate(items)
     ]
-    prompt = """你是整份试卷的题号归并审查员。下面是逐页提取的题目片段，逐页模型可能错误复用旧 question_key。
+    has_point_evidence = any(_as_float(item.get("points")) > 0 for item in items)
+    prompt = """你是整份作业附件的题号归并审查员。附件可能是试卷、习题册或学习指导书。下面是逐页提取的题目片段，逐页模型可能错误复用旧 question_key。
 请为每个 segment_index 指定 canonical_key，保证：
-1. 同一大题/章节内，页面印刷的新顶层题号必须形成新 key，key 数字后缀必须等于 printed_number。
+1. 同一大题、章节或习题组内，页面印刷的新完整题号必须形成新 key，key 后缀必须等于 printed_number；点分题号（如 1.2.3）和例题号必须完整保留。
 2. 只有明显属于上一页同一题的答案、解题过程或续接小问才沿用上一题 key；续接片段的 printed_number 可能被 OCR 误读，此时依据页面顺序和 text_start 判断。
 3. 单纯换页不能切换章节前缀；连续题号序列（例如 1、2、3、4……20）必须使用同一前缀，即使 raw_key 的前缀被逐页模型误写。只有题号重新从 1 开始或出现明确的新大题标题时才切换中文章节前缀，例如“一-20”之后的计算题为“二-1”，下一部分重新从 1 开始时为“三-1”。
-4. 根据页面计分说明校正 points：例如同一连续选择题部分写明“每空2分，共40分”，则该部分第1至20题都应为2分。只有页面文本或题干有明确分值证据时才能修改；跨页续接片段沿用该题分值。
-5. 不改题目内容；必须覆盖每个 segment_index。
+4. 根据页面计分说明校正 points：例如同一连续选择题部分写明“每空2分，共40分”，则该部分第1至20题都应为2分。只有 current_points 中已存在正分值或页面文字有明确分值证据时才能修改；普通习题册没有分值时 points 必须为0，禁止臆造每题2分。跨页续接片段沿用该题分值。
+5. 对每个片段返回 keep。只有明确的独立题目、与题目对应的答案或跨页续接内容 keep=true；目录、教学要求、基本知识点、普通讲解、过渡文字等非题目内容 keep=false。
+6. 不改题目内容；必须覆盖每个 segment_index。
 页面开头原生文本（用于识别大题标题与计分说明）：
 """ + json.dumps(page_contexts or [], ensure_ascii=False) + """
-仅返回 JSON：{"assignments":[{"segment_index":0,"canonical_key":"一-1","points":2,"reason":"页面明确出现新题1"}]}。
+仅返回 JSON：{"assignments":[{"segment_index":0,"canonical_key":"一-1","points":2,"keep":true,"reason":"页面明确出现新题1"}]}。
 题目片段：
 """ + json.dumps(compact, ensure_ascii=False)
     try:
@@ -859,7 +959,7 @@ def _consolidate_question_keys(
             item["question_key"] = _repair_numbered_key(item)
         return items, [f"全卷题号归并失败，已使用规则校正：{_clean_text(exc, 240)}"]
     raw_assignments = result.get("assignments", [])
-    assignments: dict[int, tuple[str, float | None]] = {}
+    assignments: dict[int, tuple[str, float | None, bool]] = {}
     if isinstance(raw_assignments, list):
         for assignment in raw_assignments:
             if not isinstance(assignment, dict):
@@ -875,21 +975,32 @@ def _consolidate_question_keys(
                     points = float(points_value) if points_value is not None else None
                 except (TypeError, ValueError):
                     points = None
-                assignments[index] = (key, points if points is not None and points > 0 else None)
+                keep = _as_bool(assignment.get("keep", True))
+                assignments[index] = (
+                    key,
+                    points
+                    if has_point_evidence and points is not None and points > 0
+                    else None,
+                    keep,
+                )
     warnings: list[str] = []
     if len(assignments) < len(items):
         warnings.append(
             f"全卷题号归并仅覆盖 {len(assignments)}/{len(items)} 个片段，未覆盖片段使用规则校正"
         )
+    kept_items: list[dict[str, Any]] = []
     for index, item in enumerate(items):
         if index in assignments:
-            key, points = assignments[index]
+            key, points, keep = assignments[index]
+            if not keep:
+                continue
             item["question_key"] = key
             if points is not None:
                 item["points"] = round(points, 2)
         else:
             item["question_key"] = _repair_numbered_key(item)
-    return items, warnings
+        kept_items.append(item)
+    return kept_items, warnings
 
 
 def _pixel_bbox(bbox: list[float], width: int, height: int) -> tuple[int, int, int, int]:
@@ -1052,7 +1163,9 @@ def process_homework(
                 "key": item["question_key"],
                 "section": item["section_key"],
                 "number": item["number"],
-                "text_start": item["question_text"][:180],
+                "text_start": _compose_labeled_text(
+                    item["question_text"], item.get("subquestions")
+                )[:180],
             } for item in page_items)
             raw_warnings = result.get("warnings", [])
             if isinstance(raw_warnings, list):
@@ -1075,6 +1188,8 @@ def process_homework(
             ],
         )
         warnings.extend(consolidation_warnings)
+        if not all_items:
+            raise RuntimeError("附件中没有识别到可直接布置的独立题目")
         choice_items: dict[str, list[dict[str, Any]]] = {}
         for item in all_items:
             if _question_type(item["question_type"]) == "choice":
@@ -1102,16 +1217,19 @@ def process_homework(
                 "question_type": item["question_type"],
                 "points": item["points"],
                 "prompt_parts": [],
+                "subquestion_parts": [],
                 "options": [],
                 "option_columns": item["option_columns"],
                 "figure_position": item["figure_position"],
                 "answer_parts": [],
+                "answer_subquestion_parts": [],
                 "rubric_parts": [],
                 "segments": [],
                 "first_seen": item_index,
             })
             if item["question_text"] and item["question_text"] not in question["prompt_parts"]:
                 question["prompt_parts"].append(item["question_text"])
+            question["subquestion_parts"].extend(item.get("subquestions", []))
             if item["section_title"] and not question["section_title"]:
                 question["section_title"] = item["section_title"]
             known_option_labels = {
@@ -1132,6 +1250,7 @@ def process_homework(
                 question["figure_position"] = item["figure_position"]
             if item["answer_text"] and item["answer_text"] not in question["answer_parts"]:
                 question["answer_parts"].append(item["answer_text"])
+            question["answer_subquestion_parts"].extend(item.get("answer_subquestions", []))
             if item["rubric"] and item["rubric"] not in question["rubric_parts"]:
                 question["rubric_parts"].append(item["rubric"])
             if item["points"] > question["points"]:
@@ -1163,11 +1282,15 @@ def process_homework(
                 "number": question["number"],
                 "question_type": question["question_type"],
                 "prompt": _merge_prompt_parts(question["prompt_parts"]),
+                "subquestions": _merge_labeled_parts(question["subquestion_parts"]),
                 "options": question["options"],
                 "option_columns": question["option_columns"],
                 "figure_position": question["figure_position"],
                 "points": question["points"],
                 "answer": "\n".join(question["answer_parts"]).strip(),
+                "answer_subquestions": _merge_labeled_parts(
+                    question["answer_subquestion_parts"]
+                ),
                 "rubric": "\n".join(question["rubric_parts"]).strip(),
                 "page_start": pages_used[0] if pages_used else None,
                 "page_end": pages_used[-1] if pages_used else None,
@@ -1185,8 +1308,8 @@ def process_homework(
             processing_error="",
             processing_warnings=list(dict.fromkeys(warnings))[:30],
             processing_progress=100,
-            processing_message="题目卷与答案卷的结构化数据已生成",
-            extraction_schema_version=2,
+            processing_message="作业内容与参考答案的结构化数据已生成",
+            extraction_schema_version=3,
         )
     except Exception as exc:
         logger.exception("Homework extraction failed for %s", homework_id)
@@ -1254,9 +1377,11 @@ def _grading_reference(homework: dict[str, Any]) -> list[dict[str, Any]]:
         {
             "question_id": item.get("id"),
             "number": item.get("number"),
-            "question": item.get("prompt"),
+            "question": _compose_labeled_text(item.get("prompt"), item.get("subquestions")),
             "points": item.get("points"),
-            "standard_answer": item.get("answer"),
+            "standard_answer": _compose_labeled_text(
+                item.get("answer"), item.get("answer_subquestions")
+            ),
             "rubric": item.get("rubric"),
         }
         for item in homework.get("questions", [])

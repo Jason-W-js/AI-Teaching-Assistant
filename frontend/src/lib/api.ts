@@ -175,6 +175,7 @@ export type HomeworkAsset = {
 }
 
 export type HomeworkOption = { label: string; text: string }
+export type HomeworkQuestionPart = { label: string; text: string }
 
 export type HomeworkQuestion = {
   id: string
@@ -183,6 +184,7 @@ export type HomeworkQuestion = {
   number: string
   question_type: string
   prompt: string
+  subquestions?: HomeworkQuestionPart[]
   options: HomeworkOption[]
   option_columns: number
   figure_position: 'before_question' | 'after_question' | 'after_options' | string
@@ -193,6 +195,7 @@ export type HomeworkQuestion = {
   layout_images: HomeworkAsset[]
   figures: HomeworkAsset[]
   answer?: string
+  answer_subquestions?: HomeworkQuestionPart[]
   rubric?: string
 }
 

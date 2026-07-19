@@ -144,7 +144,7 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
         <div className="student-homework-hero-copy">
           <span><Sparkles size={14} /> ASSIGNMENTS</span>
           <h1>我的作业</h1>
-          <p>查看老师发送的重排题目卷，完成后拍照提交答案。</p>
+          <p>查看老师发送的结构化作业内容，完成后拍照提交答案。</p>
         </div>
         <div className="student-homework-progress">
           <div><strong>{progress.completed}</strong><small> / {progress.total}</small></div>
@@ -182,7 +182,9 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
                 <p>{homework.instructions || '请按题目要求完成作答'}</p>
                 <div className="student-homework-data">
                   <span><strong>{homework.question_count}</strong>题</span>
-                  <span><strong>{homework.max_score}</strong>分</span>
+                  {homework.max_score > 0
+                    ? <span><strong>{homework.max_score}</strong>分</span>
+                    : <span><strong>—</strong>未设分值</span>}
                   {score && <span className="score"><strong>{score.total_score}</strong>得分</span>}
                 </div>
                 <footer><span><Clock3 size={13} /> {formatDeadline(homework.due_at)} 截止</span><Eye size={16} /></footer>
@@ -206,13 +208,13 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
             <header className="student-homework-detail-header">
               <div><span>HOMEWORK</span><h2>{detail.title}</h2><p>{detail.instructions || '请按题目要求完成作答'} · {formatDeadline(detail.due_at)} 截止</p></div>
               <div className="student-homework-detail-actions">
-                <Button icon={<Printer size={15} />} onClick={() => window.print()}>打印题目卷</Button>
+                <Button icon={<Printer size={15} />} onClick={() => window.print()}>打印作业</Button>
                 <Tag color={detail.submission ? 'success' : 'gold'}>{detail.submission ? '已提交' : '待完成'}</Tag>
               </div>
             </header>
 
             <section className="student-question-paper">
-              <div className="student-paper-notice"><ShieldCheck size={16} /><span>题干、选项和公式已按原卷层级重新排版，题图独立插回对应位置；本题目卷不含答案。</span></div>
+              <div className="student-paper-notice"><ShieldCheck size={16} /><span>题干、小问、选项和公式已按原附件层级重新排版，题图放回对应题目；学生端不显示参考答案。</span></div>
               <HomeworkPaper homework={detail} mode="questions" printable />
             </section>
 

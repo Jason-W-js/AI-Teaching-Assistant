@@ -9,8 +9,12 @@ from backend.app.services.homework import (
     HomeworkStore,
     _choice_recovery_prompt,
     _consolidate_question_keys,
+    _grading_reference,
     _merge_prompt_parts,
     _native_inline_answer_bboxes,
+    _normalized_page_items,
+    _page_prompt,
+    _split_labeled_text,
     grade_submission,
     process_homework,
 )
@@ -232,6 +236,78 @@ def test_whole_document_pass_separates_new_cross_page_question_numbers():
     assert warnings == []
 
 
+def test_whole_document_pass_filters_non_question_book_content():
+    items = [
+        {
+            "question_key": "chapter-note",
+            "number": "1.2",
+            "question_type": "other",
+            "question_text": "半导体基础知识与教学要求说明。",
+            "subquestions": [],
+            "question_bboxes": [[0, 0, 500, 500]],
+            "answer_bboxes": [],
+            "page": 10,
+        },
+        {
+            "question_key": "1.4-1.2.1",
+            "number": "1.2.1",
+            "question_type": "calculation",
+            "question_text": "对于一个锗 PN 结，试求：",
+            "subquestions": [{"label": "1", "text": "反向电压。"}],
+            "question_bboxes": [[0, 0, 500, 500]],
+            "answer_bboxes": [[0, 500, 500, 900]],
+            "page": 21,
+        },
+    ]
+    client = FakeVisionClient({
+        "assignments": [
+            {
+                "segment_index": 0,
+                "canonical_key": "chapter-note",
+                "keep": False,
+                "reason": "普通知识讲解",
+            },
+            {
+                "segment_index": 1,
+                "canonical_key": "1.4-1.2.1",
+                "keep": True,
+                "reason": "有完整题号与作答要求",
+            },
+        ],
+    })
+
+    consolidated, warnings = _consolidate_question_keys(client, items, page_count=21)
+
+    assert [item["question_key"] for item in consolidated] == ["1.4-1.2.1"]
+    assert warnings == []
+
+
+def test_whole_document_pass_cannot_invent_points_for_unscored_workbook():
+    items = [{
+        "question_key": "1.4-1.2.1",
+        "number": "1.2.1",
+        "question_type": "calculation",
+        "question_text": "对于一个锗 PN 结，试求反向电压。",
+        "subquestions": [],
+        "points": 0,
+        "question_bboxes": [[0, 0, 500, 500]],
+        "answer_bboxes": [[0, 500, 500, 900]],
+        "page": 21,
+    }]
+    client = FakeVisionClient({
+        "assignments": [{
+            "segment_index": 0,
+            "canonical_key": "1.4-1.2.1",
+            "points": 2,
+            "keep": True,
+        }],
+    })
+
+    consolidated, _ = _consolidate_question_keys(client, items, page_count=21)
+
+    assert consolidated[0]["points"] == 0
+
+
 def test_choice_questions_recover_complete_options_instead_of_becoming_blanks(tmp_path):
     store = HomeworkStore(tmp_path / "homework")
     created = store.create_homework(
@@ -345,6 +421,86 @@ def test_repeated_cross_page_stem_is_not_printed_twice():
 
     assert merged == first.strip()
     assert merged.count("如图4.1") == 1
+
+
+def test_inline_subquestions_are_split_and_backward_references_stay_in_their_part():
+    stem, parts = _split_labeled_text(
+        "如图所示，完成下列问题：(1) 求静态电流。 (2) 求电压增益。 "
+        "(3) 根据第(2)问结果求输出电阻。"
+    )
+
+    assert stem == "如图所示，完成下列问题："
+    assert [part["label"] for part in parts] == ["1", "2", "3"]
+    assert "第(2)问" in parts[2]["text"]
+
+
+def test_page_prompt_filters_book_explanations_and_requires_structured_subquestions():
+    prompt = _page_prompt(
+        {"page": 21, "text": "1.2 基本知识点 1.4 习题解答"},
+        [],
+        [],
+    )
+
+    assert "试卷、课后习题、习题册、学习指导书" in prompt
+    assert "教学要求、基本知识点、概念讲解" in prompt
+    assert "返回空 items" in prompt
+    assert "question_text 与 subquestions" in prompt
+    assert "answer_text 与 answer_subquestions" in prompt
+    assert "题目卷" not in prompt
+
+
+def test_guidance_book_question_and_answer_parts_are_normalized_for_layout_and_grading():
+    items = _normalized_page_items(
+        {
+            "items": [{
+                "question_key": "1.4-1.2.1",
+                "section_key": "1.4",
+                "section_title": "1.4 习题解答",
+                "number": "1.2.1",
+                "question_type": "calculation",
+                "question_text": (
+                    "对于一个锗 PN 结，在 $T=290\\,\\mathrm{K}$ 时，试求： "
+                    "(1) 反向电流达到饱和电流的 90% 时的反向电压。 "
+                    "(2) 正向电压和反向电压均为 $0.05\\,\\mathrm{V}$ 时的电流比。"
+                ),
+                "subquestions": [
+                    {"label": "(1)", "text": "反向电流达到饱和电流的 90% 时的反向电压。"},
+                    {"label": "2", "text": "正向电压和反向电压均为 $0.05\\,\\mathrm{V}$ 时的电流比。"},
+                ],
+                "answer_text": (
+                    "由二极管方程计算。 (1) $v_D=-0.0576\\,\\mathrm{V}$。 "
+                    "(2) 电流比为 $-7.389$。"
+                ),
+                "answer_subquestions": [
+                    {"label": "1", "text": "$v_D=-0.0576\\,\\mathrm{V}$。"},
+                    {"label": "2", "text": "电流比为 $-7.389$。"},
+                ],
+            }],
+        },
+        21,
+    )
+
+    assert len(items) == 1
+    assert items[0]["number"] == "1.2.1"
+    assert items[0]["question_text"].endswith("试求：")
+    assert items[0]["answer_text"] == "由二极管方程计算。"
+    assert [part["label"] for part in items[0]["subquestions"]] == ["1", "2"]
+    assert [part["label"] for part in items[0]["answer_subquestions"]] == ["1", "2"]
+
+    reference = _grading_reference({
+        "questions": [{
+            "id": "q1",
+            "number": "1.2.1",
+            "prompt": items[0]["question_text"],
+            "subquestions": items[0]["subquestions"],
+            "points": 0,
+            "answer": items[0]["answer_text"],
+            "answer_subquestions": items[0]["answer_subquestions"],
+            "rubric": "",
+        }],
+    })
+    assert "(1) 反向电流" in reference[0]["question"]
+    assert "(2) 电流比" in reference[0]["standard_answer"]
 
 
 def test_pdf_glyph_boxes_find_answer_filled_between_underlines():

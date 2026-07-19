@@ -73,20 +73,20 @@ function QuestionPreview({ homework }: { homework: Homework }) {
     <section className="teacher-question-section">
       <header className="teacher-section-heading">
         <div>
-          <span>REFLOWED DOCUMENTS</span>
-          <h3>结构化重排版</h3>
+          <span>STRUCTURED HOMEWORK</span>
+          <h3>结构化作业预览</h3>
         </div>
         <div className="homework-paper-actions">
           <Segmented
             value={mode}
-            options={[{ label: '题目卷', value: 'questions' }, { label: '答案卷', value: 'answers' }]}
+            options={[{ label: '作业内容', value: 'questions' }, { label: '参考答案', value: 'answers' }]}
             onChange={(value) => setMode(value as 'questions' | 'answers')}
           />
-          <Button icon={<Printer size={14} />} onClick={() => printPaper('questions')}>打印题目卷</Button>
-          <Button icon={<Printer size={14} />} onClick={() => printPaper('answers')}>打印答案卷</Button>
+          <Button icon={<Printer size={14} />} onClick={() => printPaper('questions')}>打印作业内容</Button>
+          <Button icon={<Printer size={14} />} onClick={() => printPaper('answers')}>打印参考答案</Button>
         </div>
       </header>
-      <p className="homework-reflow-note">题干、选项与公式重新排版，题图作为独立素材插回原有顺序；不再使用题目截图或白块遮答案。</p>
+      <p className="homework-reflow-note">仅保留题号、题干、小问、选项、题图和参考答案；教材讲解、目录与无关内容不会进入作业。</p>
       <HomeworkPaper homework={homework} mode={mode} printable />
     </section>
   )
@@ -274,7 +274,7 @@ export default function TeacherPage() {
           <div>
             <span className="teacher-eyebrow"><Sparkles size={14} /> AI HOMEWORK STUDIO</span>
             <h1>布置作业，重排题目与答案。</h1>
-            <p>上传 PDF、照片或扫描版习题册，自动提取题干、选项、公式、题图与答案；分别生成可打印的题目卷和答案卷，提交后由两级视觉模型批改与复核。</p>
+            <p>上传试卷、课后习题、学习指导书、照片或扫描版习题册，自动过滤讲解与无关内容，提取题号、题干、小问、选项、题图和参考答案。</p>
           </div>
           <Button type="primary" size="large" icon={<UploadCloud size={18} />} onClick={() => setUploadOpen(true)}>
             上传并创建作业
@@ -317,7 +317,9 @@ export default function TeacherPage() {
                     {homework.processing_error && <div className="homework-card-error">{homework.processing_error}</div>}
                     <div className="homework-card-data">
                       <span><strong>{homework.question_count}</strong>题</span>
-                      <span><strong>{homework.max_score}</strong>分</span>
+                      {homework.max_score > 0
+                        ? <span><strong>{homework.max_score}</strong>分</span>
+                        : <span><strong>—</strong>未设分值</span>}
                       <span><strong>{homework.submission_count || 0}</strong>份提交</span>
                     </div>
                     <footer>
@@ -404,7 +406,7 @@ export default function TeacherPage() {
             </header>
 
             {detail.status === 'processing' && (
-              <div className="homework-processing-panel"><LoaderCircle className="spin" size={30} /><div><strong>{detail.processing_message || '正在逐页提取题目、题图与答案'}</strong><span>进度 {detail.processing_progress || 0}% · 页面较多时需要几分钟，完成后可预览重排的题目卷和答案卷。</span></div></div>
+              <div className="homework-processing-panel"><LoaderCircle className="spin" size={30} /><div><strong>{detail.processing_message || '正在逐页筛选题目、题图与参考答案'}</strong><span>进度 {detail.processing_progress || 0}% · 页面较多时需要几分钟，完成后可预览结构化作业内容。</span></div></div>
             )}
             {detail.processing_error && <div className="homework-detail-error"><AlertTriangle size={18} /><div><strong>识别未完成</strong><span>{detail.processing_error}</span></div></div>}
             {detail.status === 'draft' && incompleteChoiceNumbers.length > 0 && (
