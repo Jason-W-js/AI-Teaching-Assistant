@@ -26,6 +26,7 @@ from backend.app.rag.multimodal import (
     _normalize_formula_result,
     _reconcile_formula_with_page_ocr,
     _ocr_scanned_pages,
+    _page_cleaning_decisions,
     _safe_partial_noise_fragment,
     build_local_knowledge_graph,
     enhance_pdf,
@@ -312,6 +313,80 @@ def test_partial_cleaning_only_accepts_explicit_publishing_noise():
     assert _safe_partial_noise_fragment("版权所有，扫码关注公众号") is True
     assert _safe_partial_noise_fragment("Q 是英文 Quiescent 的字头") is False
     assert _safe_partial_noise_fragment("2.2 基本共射放大电路的工作原理") is False
+
+
+def test_page_cleaning_filters_exercises_even_when_they_contain_technical_content():
+    class Config:
+        enabled = True
+        provider = "test"
+        model = "selected-model"
+
+    class Client:
+        config = Config()
+
+        def complete_json(self, prompt):
+            assert "独立的课后习题" in prompt
+            assert "带讲解或解答过程的例题" in prompt
+            return {
+                "decisions": [
+                    {
+                        "page": 7,
+                        "page_type": "exercise",
+                        "keep": True,
+                        "reason": "本页为课后习题",
+                        "remove_fragments": [],
+                    }
+                ]
+            }
+
+    page = PageDocument(
+        "习题 2.1：计算 PN 结电流，已知 I = U / R。",
+        "lesson.pdf",
+        7,
+        "第二章",
+        "习题",
+    )
+
+    decision = _page_cleaning_decisions([page], Client())[7]
+
+    assert decision["page_type"] == "exercise"
+    assert decision["keep"] is False
+
+
+def test_page_cleaning_still_protects_non_exercise_technical_content():
+    class Config:
+        enabled = True
+        provider = "test"
+        model = "selected-model"
+
+    class Client:
+        config = Config()
+
+        def complete_json(self, _prompt):
+            return {
+                "decisions": [
+                    {
+                        "page": 3,
+                        "page_type": "noise",
+                        "keep": False,
+                        "reason": "误判为噪声",
+                        "remove_fragments": [],
+                    }
+                ]
+            }
+
+    page = PageDocument(
+        "PN 结具有单向导电性，电流满足 I = U / R。",
+        "lesson.pdf",
+        3,
+        "第一章",
+        "PN 结",
+    )
+
+    decision = _page_cleaning_decisions([page], Client())[3]
+
+    assert decision["keep"] is True
+    assert "安全策略强制保留" in decision["reason"]
 
 
 def test_waveform_figure_is_not_promoted_to_circuit_when_vision_fails(monkeypatch):

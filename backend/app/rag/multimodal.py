@@ -37,6 +37,8 @@ PARTIAL_NOISE_MARKERS = (
     "扫码", "公众号", "购买正版", "资源下载", "广告", "网址", "http://", "https://",
 )
 
+PAGE_CLEANING_POLICY_VERSION = "2.0-exclude-exercises"
+
 SCANNED_PAGE_PLACEHOLDER = "[本页主要包含电路图、公式或其他图形内容]"
 PAGE_OCR_SCHEMA_VERSION = "1.0-qwen-page-ocr"
 PAGE_OCR_PROMPT = """你是模拟电子技术教材的高保真 OCR 与结构识别器。请完整转写本页，严格保持阅读顺序、标题层级、图题、表题、公式、变量、上下标和单位；不得概括、改写或补写看不清的内容。省略页码和重复的页眉。
@@ -178,8 +180,10 @@ def _page_cleaning_decisions(
             "page": page.page,
             "source_page": page.source_page or page.page,
             "keep": True,
+            "page_type": "course_content",
             "reason": "默认保留课程内容",
             "method": "rule",
+            "cleaning_policy_version": PAGE_CLEANING_POLICY_VERSION,
             "remove_fragments": [],
         }
         for page in pages
@@ -192,11 +196,13 @@ def _page_cleaning_decisions(
             f"<PAGE number=\"{item.page}\">\n{item.text[:900]}\n</PAGE>" for item in batch
         )
         result = client.complete_json(
-            """你是电路教材清洗器。判断每页是否包含可用于教学问答的正文、例题、公式、表格或电路图。
-仅当整页只是封面、版权/版本说明、空白页、纯广告、与课程无关的序言时才丢弃；目录、章节导读和任何技术内容必须保留。
+            """你是电路教材清洗器。判断每页是否属于可用于教学问答的有效课程内容。
+将页面分为 course_content、exercise、noise 三类。正文、带完整讲解或解答过程的例题、公式、表格、电路图、目录和章节导读属于 course_content。
+独立的课后习题、复习题、思考题、自测题、练习题以及仅提供这些题目答案的页面属于 exercise；即使包含课程概念、公式或电路图，也必须将 keep 设为 false。不要把带讲解或解答过程的例题误判为 exercise。
+封面、版权/出版信息、空白页、广告、二维码和下载说明、与课程无关的目录、序言或噪声文本属于 noise，并将 keep 设为 false。
 若页面包含少量与课程无关的版本说明、广告或页眉噪音但同时有技术正文，必须保留页面，
 并在 remove_fragments 中逐字列出需要删除的短片段；不得删除公式、图题、例题或技术段落。
-返回 JSON：{"decisions":[{"page":1,"keep":true,"reason":"...","remove_fragments":["原文片段"]}]}，不得改写页码。\n"""
+返回 JSON：{"decisions":[{"page":1,"page_type":"course_content|exercise|noise","keep":true,"reason":"...","remove_fragments":["原文片段"]}]}，不得改写页码。\n"""
             + samples
         )
         for item in result.get("decisions", []):
@@ -210,15 +216,25 @@ def _page_cleaning_decisions(
                 fragments = item.get("remove_fragments", [])
                 if not isinstance(fragments, list):
                     fragments = []
+                keep = item.get("keep", True)
+                if not isinstance(keep, bool):
+                    keep = str(keep).strip().lower() not in {"false", "0", "no"}
+                page_type = str(item.get("page_type", "")).strip().lower()
+                if page_type not in {"course_content", "exercise", "noise"}:
+                    page_type = "course_content" if keep else "noise"
+                if page_type == "exercise":
+                    keep = False
                 decisions[page_no] = {
                     "page": page_no,
                     "source_page": next(
                         (page.source_page or page.page for page in pages if page.page == page_no),
                         page_no,
                     ),
-                    "keep": bool(item.get("keep", True)),
+                    "keep": keep,
+                    "page_type": page_type,
                     "reason": str(item.get("reason", "模型语义清洗"))[:240],
                     "method": f"llm:{client.config.provider}/{client.config.model}",
+                    "cleaning_policy_version": PAGE_CLEANING_POLICY_VERSION,
                     "requested_remove_fragments": [
                         str(fragment).strip()
                         for fragment in fragments[:12]
@@ -233,9 +249,13 @@ def _page_cleaning_decisions(
                 page_text = next(
                     (page.text for page in pages if page.page == page_no), ""
                 )
-                if not decisions[page_no]["keep"] and (
-                    extract_course_concepts(page_text)
-                    or re.search(r"[=+−±√∫ΣΩπ^_]", page_text)
+                if (
+                    not decisions[page_no]["keep"]
+                    and decisions[page_no]["page_type"] != "exercise"
+                    and (
+                        extract_course_concepts(page_text)
+                        or re.search(r"[=+−±√∫ΣΩπ^_]", page_text)
+                    )
                 ):
                     decisions[page_no]["keep"] = True
                     decisions[page_no]["reason"] = (
@@ -1162,6 +1182,7 @@ def enhance_pdf(
                 for item in cached_audit
                 if isinstance(item, dict)
                 and item.get("method") == expected_method
+                and item.get("cleaning_policy_version") == PAGE_CLEANING_POLICY_VERSION
                 and item.get("document_hash") == document_hash
                 and item.get("page_text_hash") == page_text_hashes.get(int(item["page"]))
             }
@@ -1178,8 +1199,10 @@ def enhance_pdf(
                 "page": page_document.page,
                 "source_page": page_document.source_page or page_document.page,
                 "keep": True,
+                "page_type": "course_content",
                 "reason": "默认保留课程内容",
                 "method": "rule",
+                "cleaning_policy_version": PAGE_CLEANING_POLICY_VERSION,
                 "remove_fragments": [],
             },
         )
@@ -1191,12 +1214,17 @@ def enhance_pdf(
             fragment for fragment in requested
             if _safe_partial_noise_fragment(str(fragment))
         ]
-        if not decision.get("keep", True) and (
-            extract_course_concepts(page_document.text)
-            or re.search(r"[=+−±√∫ΣΩπ^_]", page_document.text)
+        if (
+            not decision.get("keep", True)
+            and decision.get("page_type") != "exercise"
+            and (
+                extract_course_concepts(page_document.text)
+                or re.search(r"[=+−±√∫ΣΩπ^_]", page_document.text)
+            )
         ):
             decision["keep"] = True
             decision["reason"] = "检测到课程概念或公式，安全策略强制保留"
+        decision["cleaning_policy_version"] = PAGE_CLEANING_POLICY_VERSION
     for decision in decisions.values():
         decision["document_hash"] = document_hash
         try:
