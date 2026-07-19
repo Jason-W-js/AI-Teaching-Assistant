@@ -17,5 +17,33 @@ export function normalizeLatex(input: string): string {
   const singleDollarCount = (text.match(/(?<!\\)\$/g) || []).length
   if (singleDollarCount % 2 === 1) text += '$'
   text = text.replace(/@@MATH_BLOCK_(\d+)@@/g, (_, index) => protectedBlocks[Number(index)])
+
+  const completeMath: string[] = []
+  text = text.replace(/\$\$[\s\S]*?\$\$|\$(?:\\.|[^$\n])*?\$/g, (block) => {
+    completeMath.push(block)
+    return `@@PROTECTEDMATH${completeMath.length - 1}@@`
+  })
+
+  text = text.replace(
+    /(^|[^A-Za-z0-9_$\\])([A-Za-z])_([A-Za-z][A-Za-z0-9]*(?:\([A-Za-z]+\))?)(['′])?(?=$|[^A-Za-z0-9_])/g,
+    (_, prefix, base, subscript, prime) => `${prefix}$${base}_{${subscript}}${prime ? "'" : ''}$`,
+  )
+  text = text.replace(
+    /(^|[^A-Za-z0-9_$\\])(β|ω)(?=$|[^A-Za-z0-9_])/g,
+    (_, prefix, symbol) => `${prefix}$\\${symbol === 'β' ? 'beta' : 'omega'}$`,
+  )
+  text = text.replace(
+    /(^|[^A-Za-z0-9_$\\])([±+-]?\d+(?:\.\d+)?)\s*([fpnumkM]?)(Ω|V|A|F|Hz|W)(?=$|[^A-Za-z0-9_])/g,
+    (_, prefix, value, unitPrefix, unit) => {
+      const unitLatex = unit === 'Ω'
+        ? `${unitPrefix ? `\\mathrm{${unitPrefix}}` : ''}\\Omega`
+        : `\\mathrm{${unitPrefix}${unit}}`
+      return `${prefix}$${value}\\,${unitLatex}$`
+    },
+  )
+  text = text.replace(
+    /@@PROTECTEDMATH(\d+)@@/g,
+    (_, index) => completeMath[Number(index)],
+  )
   return text
 }

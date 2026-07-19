@@ -1,4 +1,5 @@
 import io
+import json
 
 import fitz
 import pytest
@@ -6,7 +7,9 @@ from PIL import Image, ImageDraw
 
 from backend.app.services.homework import (
     HomeworkStore,
+    _choice_recovery_prompt,
     _consolidate_question_keys,
+    _merge_prompt_parts,
     _native_inline_answer_bboxes,
     grade_submission,
     process_homework,
@@ -227,6 +230,121 @@ def test_whole_document_pass_separates_new_cross_page_question_numbers():
 
     assert [item["question_key"] for item in consolidated] == ["二-1", "二-1", "二-2"]
     assert warnings == []
+
+
+def test_choice_questions_recover_complete_options_instead_of_becoming_blanks(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    created = store.create_homework(
+        title="选择题保真测试",
+        instructions="",
+        due_at="",
+        filename="choice.png",
+        content_type="image/png",
+        data=sample_image_bytes(),
+    )
+    client = FakeVisionClient(
+        {
+            "items": [{
+                "question_key": "一-1",
+                "section_key": "一",
+                "section_title": "一、选择题（每题 2 分）",
+                "number": "1",
+                "question_type": "choice",
+                "question_text": "二极管的直流电阻和交流电阻分别为 ______。",
+                "options": [],
+                "points": 2,
+                "question_bboxes": [[50, 50, 950, 300]],
+                "answer_bboxes": [[400, 100, 430, 130]],
+                "answer_text": "A",
+            }],
+        },
+        {
+            "recoveries": [{
+                "question_key": "一-1",
+                "number": "1",
+                "options": [
+                    {"label": "A", "text": "$700\\,\\Omega$，$26\\,\\Omega$"},
+                    {"label": "B", "text": "$700\\,\\Omega$，$16\\,\\Omega$"},
+                    {"label": "C", "text": "$0.7\\,\\Omega$，$26\\,\\Omega$"},
+                    {"label": "D", "text": "$0.7\\,\\Omega$，$16\\,\\Omega$"},
+                ],
+                "option_columns": 4,
+            }],
+        },
+    )
+
+    process_homework(
+        store,
+        created["id"],
+        client=client,
+        layout_adapter=FakeLayoutAdapter(),
+    )
+
+    question = store.get_raw_homework(created["id"])["questions"][0]
+    assert question["question_type"] == "choice"
+    assert [option["label"] for option in question["options"]] == ["A", "B", "C", "D"]
+    assert question["option_columns"] == 4
+    assert len(client.calls) == 2
+    store.publish(created["id"])
+
+
+def test_choice_recovery_prompt_contains_valid_json_example():
+    prompt = _choice_recovery_prompt(
+        {"page": 2, "text": "A. 1kΩ B. 2kΩ C. 4kΩ D. 5kΩ"},
+        [{
+            "question_key": "一-3",
+            "number": "3",
+            "page": 1,
+            "question_text": "输出电阻为 ______。",
+        }],
+    )
+    example = prompt.rsplit("仅返回 JSON：\n", 1)[1].removesuffix("。")
+
+    parsed = json.loads(example)
+
+    assert parsed["recoveries"][0]["options"][0]["text"] == "$1\\,\\mathrm{k}\\Omega$"
+
+
+def test_publish_blocks_choice_questions_without_options(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    created = store.create_homework(
+        title="不完整选择题",
+        instructions="",
+        due_at="",
+        filename="choice.png",
+        content_type="image/png",
+        data=sample_image_bytes(),
+    )
+    store.update_homework(
+        created["id"],
+        status="draft",
+        questions=[{
+            "id": "q1",
+            "number": "1",
+            "question_type": "choice",
+            "prompt": "请选择正确答案。",
+            "options": [],
+        }],
+    )
+
+    with pytest.raises(RuntimeError, match="缺少完整选项"):
+        store.publish(created["id"])
+
+
+def test_repeated_cross_page_stem_is_not_printed_twice():
+    first = """如图4.1 所示共发射极放大电路，β = 150，V_T = 26mV，V_BE(on) = 0.7V。
+(1) 求静态工作点电流 I_CQ。
+(2) 使用微变等效电路法求电压增益 A_v1。
+(3) 若电容 C_e 开路，求电压增益 A_v2。"""
+    hallucinated_repeat = """如图4.1 所示共发射极放大电路，β = 150，V_T = 26mV，V_BE(on) = 0.7V。
+(1) 求静态工作点电流 I_CQ。
+(2) 使用微变等效电路求中频电压增益 A_v1。
+(3) 若在 R_E1 两端并联电容 C_E，求闭环增益 A_v2。"""
+
+    merged = _merge_prompt_parts([first, hallucinated_repeat])
+
+    assert merged == first.strip()
+    assert merged.count("如图4.1") == 1
 
 
 def test_pdf_glyph_boxes_find_answer_filled_between_underlines():

@@ -8,6 +8,7 @@ import mimetypes
 import re
 import shutil
 import threading
+from difflib import SequenceMatcher
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -102,6 +103,57 @@ def _option_columns(value: Any) -> int:
 def _figure_position(value: Any) -> str:
     position = _clean_text(value or "after_question", 40)
     return position if position in {"before_question", "after_question", "after_options"} else "after_question"
+
+
+def _question_type(value: Any) -> str:
+    raw = _clean_text(value or "other", 40).lower()
+    aliases = {
+        "multiple_choice": "choice",
+        "single_choice": "choice",
+        "选择题": "choice",
+        "calculation": "calculation",
+        "计算题": "calculation",
+        "short_answer": "short_answer",
+        "简答题": "short_answer",
+        "design": "design",
+        "设计题": "design",
+    }
+    allowed = {"choice", "calculation", "short_answer", "design", "other"}
+    return aliases.get(raw, raw if raw in allowed else "other")
+
+
+def _comparison_text(value: str) -> str:
+    return re.sub(r"[\s`$\\，。；：、（）()【】\[\]{}]", "", value).lower()
+
+
+def _merge_prompt_parts(parts: Iterable[str]) -> str:
+    """Merge true continuations while dropping repeated or hallucinated restatements."""
+    merged: list[str] = []
+    comparisons: list[str] = []
+    for raw in parts:
+        text = _clean_text(raw)
+        compact = _comparison_text(text)
+        if not compact:
+            continue
+        duplicate = False
+        for existing in comparisons:
+            shorter = min(len(existing), len(compact))
+            if compact in existing or (existing in compact and shorter >= 80):
+                duplicate = True
+                break
+            prefix = 0
+            for left, right in zip(existing, compact):
+                if left != right:
+                    break
+                prefix += 1
+            similarity = SequenceMatcher(None, existing, compact, autojunk=False).ratio()
+            if similarity >= 0.72 or (shorter >= 100 and prefix >= max(60, round(shorter * 0.35))):
+                duplicate = True
+                break
+        if not duplicate:
+            merged.append(text)
+            comparisons.append(compact)
+    return "\n".join(merged).strip()
 
 
 class HomeworkStore:
@@ -374,6 +426,15 @@ class HomeworkStore:
         raw = self.get_raw_homework(homework_id)
         if raw.get("status") not in {"draft", "published"} or not raw.get("questions"):
             raise RuntimeError("题目尚未识别完成，暂时不能发布")
+        incomplete_choices = [
+            item
+            for item in raw.get("questions", [])
+            if _question_type(item.get("question_type")) == "choice"
+            and len(_normalize_options(item.get("options"))) < 2
+        ]
+        if incomplete_choices:
+            numbers = "、".join(str(item.get("number", "?")) for item in incomplete_choices[:8])
+            raise RuntimeError(f"选择题 {numbers} 缺少完整选项，请重新识别后再发布")
         timestamp = _now()
         self.update_homework(homework_id, status="published", published_at=timestamp)
         return self.get_homework(homework_id, role="teacher")
@@ -624,12 +685,15 @@ def _page_prompt(
 坐标要求：所有 bbox 使用当前整页图片的归一化坐标 [left,top,right,bottom]，范围 0-1000。
 拆分规则：
 1. question_key 必须在整份附件内唯一且稳定，例如“一-18”“二-2”“三-1”；key 后缀必须与页面印刷的顶层题号 number 一致。跨页连续题号（如上一页 3、本页 4）必须保持相同章节前缀；跨页续题沿用原 question_key，新题即使版式相似也绝不能复用上一题 key。
-2. question_text 要按原卷顺序保留公式、换行和小问层级，使用 Markdown + LaTeX；已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。选择题选项必须拆到 options，不能混在 question_text。
-3. section_key 是大题编号（如“一”“二”），section_title 是完整大题标题及计分说明；option_columns 按原卷选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
-4. question_bboxes 只用于定位题干，不会作为最终学生题面；figure_bboxes 必须单独精确框出该题真正引用的电路图、波形图或表格。
-5. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、‘解：’之后的过程、评分说明；answer_text 保留标准答案与关键步骤，rubric 保留分值与评分点。
-6. 只有答案、没有新题干的页面片段，也要归入对应 question_key，但 question_bboxes 可为空。
-7. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。封面、考试说明、页眉页脚不要作为题目。
+2. question_type 是原卷的客观事实，不得改题型。大题标明“选择题”时，其下每题必须是 choice；横线中已印有 A/B/C/D 是答案标记，不代表填空题。
+3. choice 题必须完整返回页面上的 A/B/C/D 选项，放入 options，question_text 不包含选项。选项在下一页顶部续排时，即使本页没有重复题干，也要用原 question_key 返回一个 question_text 为空、但 options 完整的续接片段。
+4. question_text 只能转录当前页面肉眼可见的题干，不得从“最近已出现的题目”复制、改写或补全题干。若当前页只有上一题的题图、答案或评分过程，question_text 必须为空。
+5. 保留原卷换行和小问层级，使用 Markdown + LaTeX。所有电路变量、下标、希腊字母、单位和算式都必须放在 $...$ 中，例如 $\\beta=150$、$V_{{T}}=26\\,\\mathrm{{mV}}$、$V_{{BE(on)}}=0.7\\,\\mathrm{{V}}$、$r'_{{bb}}=100\\,\\Omega$、$R_{{B1}}=60\\,\\mathrm{{k}}\\Omega$、$A_{{v1}}=v_o/v_i$。禁止输出裸露的 V_T、R_B1、r_bb'、26mV 或 4kΩ。
+6. 已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。section_key 是大题编号，section_title 是完整大题标题及计分说明；option_columns 按原卷选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
+7. question_bboxes 只用于定位题干，不会作为最终学生题面；figure_bboxes 必须单独精确框出该题真正引用的电路图、波形图或表格。
+8. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、‘解：’之后的过程、评分说明；answer_text 保留标准答案与关键步骤，rubric 保留分值与评分点。
+9. 只有答案、没有新题干的页面片段，也要归入对应 question_key，但 question_bboxes 可为空。
+10. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。封面、考试说明、页眉页脚不要作为题目。
 
 最近已出现的题目（用于判断跨页续接，不得覆盖页面上的新题号）：{json.dumps(previous_items[-12:], ensure_ascii=False)}
 PDF 原生文本（可能为空或错序）：
@@ -659,7 +723,7 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             "section_key": _clean_text(raw.get("section_key", ""), 40),
             "section_title": _clean_text(raw.get("section_title", ""), 240),
             "number": number or key,
-            "question_type": _clean_text(raw.get("question_type", "other"), 40) or "other",
+            "question_type": _question_type(raw.get("question_type")),
             "question_text": _clean_text(raw.get("question_text", raw.get("prompt", ""))),
             "options": _normalize_options(raw.get("options", [])),
             "option_columns": _option_columns(raw.get("option_columns")),
@@ -673,6 +737,72 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             "page": page_number,
         })
     return result
+
+
+def _choice_recovery_prompt(page: dict[str, Any], candidates: list[dict[str, Any]]) -> str:
+    compact = [
+        {
+            "question_key": item["question_key"],
+            "number": item["number"],
+            "page": item["page"],
+            "text_start": item["question_text"][:300],
+        }
+        for item in candidates
+    ]
+    return f"""你是试卷选择题选项校对员。当前是第 {page['page']} 页，首次识别已确认下列题为选择题，但没有取得完整选项。
+任务：
+1. 只转录当前页面肉眼可见的 A/B/C/D 选项，不要改写、猜测或从答案反推选项。
+2. 页首如果是上一页末尾题目的选项，必须归入候选列表中的原 question_key。
+3. 横线里已印的 A/B/C/D 是标准答案，不要把它混入任何选项文本。
+4. 选项中的变量、公式和单位使用 Markdown + LaTeX；option_columns 依原页布局只能是 1、2 或 4。
+候选题：{json.dumps(compact, ensure_ascii=False)}
+PDF 原生文本（只作辅助，以图像为准）：{page['text'][:8000]}
+仅返回 JSON：
+{{"recoveries":[{{"question_key":"一-3","number":"3","options":[{{"label":"A","text":"$1\\\\,\\\\mathrm{{k}}\\\\Omega$"}},{{"label":"B","text":"$2\\\\,\\\\mathrm{{k}}\\\\Omega$"}},{{"label":"C","text":"$4\\\\,\\\\mathrm{{k}}\\\\Omega$"}},{{"label":"D","text":"$5\\\\,\\\\mathrm{{k}}\\\\Omega$"}}],"option_columns":4}}]}}。"""
+
+
+def _normalized_choice_recoveries(value: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_items = value.get("recoveries", value.get("items", []))
+    if not isinstance(raw_items, list):
+        return []
+    result: list[dict[str, Any]] = []
+    for raw in raw_items:
+        if not isinstance(raw, dict):
+            continue
+        options = _normalize_options(raw.get("options"))
+        if len(options) < 2:
+            continue
+        result.append({
+            "question_key": _clean_text(raw.get("question_key"), 80),
+            "number": _clean_text(raw.get("number"), 80),
+            "options": options,
+            "option_columns": _option_columns(raw.get("option_columns")),
+        })
+    return result
+
+
+def _apply_choice_recoveries(
+    recoveries: list[dict[str, Any]], targets: list[dict[str, Any]]
+) -> None:
+    for recovery in recoveries:
+        candidates = [
+            item
+            for item in targets
+            if item["question_key"] == recovery["question_key"]
+        ]
+        if not candidates and recovery["number"]:
+            candidates = [
+                item
+                for item in targets
+                if item["number"] == recovery["number"]
+                and _question_type(item["question_type"]) == "choice"
+            ]
+        if not candidates:
+            continue
+        target = candidates[-1]
+        target["question_type"] = "choice"
+        target["options"] = recovery["options"]
+        target["option_columns"] = recovery["option_columns"]
 
 
 def _repair_numbered_key(item: dict[str, Any]) -> str:
@@ -893,6 +1023,29 @@ def process_homework(
                     logger.warning("Homework page %s extraction failed: %s", page["page"], exc)
                     continue
             page_items = _normalized_page_items(result, int(page["page"]))
+            recovery_candidates: dict[str, dict[str, Any]] = {}
+            for item in all_items + page_items:
+                if (
+                    _question_type(item["question_type"]) == "choice"
+                    and len(item["options"]) < 2
+                    and int(item["page"]) >= int(page["page"]) - 1
+                ):
+                    recovery_candidates.setdefault(item["question_key"], item)
+            if recovery_candidates:
+                try:
+                    recovery_result = client.complete_json(
+                        _choice_recovery_prompt(page, list(recovery_candidates.values())),
+                        image_bytes=Path(page["path"]).read_bytes(),
+                        image_mime="image/png",
+                    )
+                    _apply_choice_recoveries(
+                        _normalized_choice_recoveries(recovery_result),
+                        all_items + page_items,
+                    )
+                except Exception as exc:
+                    warnings.append(
+                        f"第 {page['page']} 页选择题选项补录失败：{_clean_text(exc, 240)}"
+                    )
             all_items.extend(page_items)
             previous_items.extend({
                 "page": item["page"],
@@ -922,6 +1075,21 @@ def process_homework(
             ],
         )
         warnings.extend(consolidation_warnings)
+        choice_items: dict[str, list[dict[str, Any]]] = {}
+        for item in all_items:
+            if _question_type(item["question_type"]) == "choice":
+                choice_items.setdefault(item["question_key"], []).append(item)
+        incomplete_choices = [
+            parts[0]
+            for parts in choice_items.values()
+            if not any(len(item["options"]) >= 2 for item in parts)
+        ]
+        if incomplete_choices:
+            labels = [f"第{item['page']}页第{item['number']}题" for item in incomplete_choices]
+            warnings.append(
+                f"仍有 {len(incomplete_choices)} 道选择题缺少完整选项："
+                + "、".join(labels[:12])
+            )
 
         grouped: dict[str, dict[str, Any]] = {}
         for item_index, item in enumerate(all_items):
@@ -946,11 +1114,18 @@ def process_homework(
                 question["prompt_parts"].append(item["question_text"])
             if item["section_title"] and not question["section_title"]:
                 question["section_title"] = item["section_title"]
-            known_option_labels = {option["label"] for option in question["options"]}
+            known_option_labels = {
+                option["label"]: index for index, option in enumerate(question["options"])
+            }
             for option in item["options"]:
-                if option["label"] not in known_option_labels:
+                known_index = known_option_labels.get(option["label"])
+                if known_index is None:
                     question["options"].append(option)
-                    known_option_labels.add(option["label"])
+                    known_option_labels[option["label"]] = len(question["options"]) - 1
+                elif len(option["text"]) > len(question["options"][known_index]["text"]):
+                    question["options"][known_index] = option
+            if item["options"]:
+                question["question_type"] = "choice"
             if item["option_columns"] > question["option_columns"]:
                 question["option_columns"] = item["option_columns"]
             if item["figure_bboxes"]:
@@ -980,10 +1155,14 @@ def process_homework(
                 "id": question["id"],
                 "sequence": sequence,
                 "section_key": question["section_key"],
-                "section_title": question["section_title"] or question["section_key"],
+                "section_title": question["section_title"] or (
+                    f"{question['section_key']}、选择题"
+                    if question["question_type"] == "choice"
+                    else f"{question['section_key']}、题目"
+                ),
                 "number": question["number"],
                 "question_type": question["question_type"],
-                "prompt": "\n".join(question["prompt_parts"]).strip(),
+                "prompt": _merge_prompt_parts(question["prompt_parts"]),
                 "options": question["options"],
                 "option_columns": question["option_columns"],
                 "figure_position": question["figure_position"],
@@ -1007,6 +1186,7 @@ def process_homework(
             processing_warnings=list(dict.fromkeys(warnings))[:30],
             processing_progress=100,
             processing_message="题目卷与答案卷的结构化数据已生成",
+            extraction_schema_version=2,
         )
     except Exception as exc:
         logger.exception("Homework extraction failed for %s", homework_id)

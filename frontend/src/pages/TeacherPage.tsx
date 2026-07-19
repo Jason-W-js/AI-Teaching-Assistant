@@ -196,6 +196,9 @@ export default function TeacherPage() {
   }, [hasRunningTask, loadHomeworks])
 
   const detail = homeworks.find((homework) => homework.id === detailId) || null
+  const incompleteChoiceNumbers = detail?.questions
+    .filter((question) => question.question_type === 'choice' && (question.options?.length || 0) < 2)
+    .map((question) => question.number) || []
   const stats = useMemo(() => ({
     total: homeworks.length,
     published: homeworks.filter((item) => item.status === 'published').length,
@@ -389,7 +392,7 @@ export default function TeacherPage() {
               <div className="homework-detail-actions">
                 {detail.source_url && <Button href={detail.source_url} target="_blank" icon={<Eye size={15} />}>原始附件</Button>}
                 {detail.status === 'draft' && (
-                  <Button type="primary" icon={<Send size={15} />} loading={actionId === detail.id} onClick={() => void runAction(detail.id, 'publish')}>发布给学生</Button>
+                  <Button type="primary" icon={<Send size={15} />} loading={actionId === detail.id} disabled={incompleteChoiceNumbers.length > 0} onClick={() => void runAction(detail.id, 'publish')}>发布给学生</Button>
                 )}
                 {detail.status === 'error' && (
                   <Button type="primary" icon={<RefreshCw size={15} />} loading={actionId === detail.id} onClick={() => void runAction(detail.id, 'retry')}>重新识别</Button>
@@ -404,6 +407,16 @@ export default function TeacherPage() {
               <div className="homework-processing-panel"><LoaderCircle className="spin" size={30} /><div><strong>{detail.processing_message || '正在逐页提取题目、题图与答案'}</strong><span>进度 {detail.processing_progress || 0}% · 页面较多时需要几分钟，完成后可预览重排的题目卷和答案卷。</span></div></div>
             )}
             {detail.processing_error && <div className="homework-detail-error"><AlertTriangle size={18} /><div><strong>识别未完成</strong><span>{detail.processing_error}</span></div></div>}
+            {detail.status === 'draft' && incompleteChoiceNumbers.length > 0 && (
+              <div className="homework-integrity-warning">
+                <AlertTriangle size={19} />
+                <div>
+                  <strong>检测到选择题选项不完整</strong>
+                  <span>第 {incompleteChoiceNumbers.slice(0, 12).join('、')} 题仍是旧版识别数据，已禁止发布；重新识别后会保留原选择题形式和 A/B/C/D 选项。</span>
+                </div>
+                <Button icon={<RefreshCw size={14} />} loading={actionId === detail.id} onClick={() => void runAction(detail.id, 'retry')}>修复并重新识别</Button>
+              </div>
+            )}
             {detail.processing_warnings.length > 0 && <div className="homework-warnings">{detail.processing_warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>}
             {detail.questions.length > 0 && <QuestionPreview homework={detail} />}
 

@@ -20,4 +20,17 @@ for (const block of blocks) {
 }
 assert.equal(normalized.includes('\\xrightarrow'), true)
 
+const circuitNotation = normalizeLatex(
+  "β = 150，V_T = 26mV，V_BE(on) = 0.7V，r_bb' = 100 Ω，R_B1 = 60kΩ，A_v1 = v_o / v_i。",
+)
+assert.equal(circuitNotation.includes('$\\beta$'), true)
+assert.equal(circuitNotation.includes('$V_{T}$'), true)
+assert.equal(circuitNotation.includes('$26\\,\\mathrm{mV}$'), true)
+assert.equal(circuitNotation.includes('$V_{BE(on)}$'), true)
+assert.equal(circuitNotation.includes("$r_{bb}'$"), true)
+assert.equal(circuitNotation.includes('$100\\,\\Omega$'), true)
+assert.equal(circuitNotation.includes('$R_{B1}$'), true)
+assert.equal(circuitNotation.includes('$60\\,\\mathrm{k}\\Omega$'), true)
+assert.equal(circuitNotation.includes('$A_{v1}$ = $v_{o}$ / $v_{i}$'), true)
+
 console.log('LaTeX normalization regression check passed')
