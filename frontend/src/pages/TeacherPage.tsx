@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Button, Empty, Input, Modal, Popconfirm, Progress, Spin, Tag, Upload, message } from 'antd'
+import { Button, Empty, Input, Modal, Popconfirm, Progress, Segmented, Spin, Tag, Upload, message } from 'antd'
 import type { UploadFile } from 'antd'
 import {
   AlertTriangle,
@@ -14,8 +14,8 @@ import {
   FileCheck2,
   FileText,
   GraduationCap,
-  Image as ImageIcon,
   LoaderCircle,
+  Printer,
   RefreshCw,
   Send,
   ShieldCheck,
@@ -32,6 +32,7 @@ import {
   publishHomework,
   reprocessHomework,
 } from '../lib/api'
+import HomeworkPaper from '../components/HomeworkPaper'
 
 const { Dragger } = Upload
 const { TextArea } = Input
@@ -63,40 +64,30 @@ const submissionStatus = {
 } as const
 
 function QuestionPreview({ homework }: { homework: Homework }) {
+  const [mode, setMode] = useState<'questions' | 'answers'>('questions')
+  const printPaper = (nextMode: 'questions' | 'answers') => {
+    setMode(nextMode)
+    window.setTimeout(() => window.print(), 80)
+  }
   return (
     <section className="teacher-question-section">
       <header className="teacher-section-heading">
         <div>
-          <span>QUESTION LAYOUT</span>
-          <h3>学生将看到的题目</h3>
+          <span>REFLOWED DOCUMENTS</span>
+          <h3>结构化重排版</h3>
         </div>
-        <small>答案区域已遮除 · 共 {homework.question_count} 题</small>
+        <div className="homework-paper-actions">
+          <Segmented
+            value={mode}
+            options={[{ label: '题目卷', value: 'questions' }, { label: '答案卷', value: 'answers' }]}
+            onChange={(value) => setMode(value as 'questions' | 'answers')}
+          />
+          <Button icon={<Printer size={14} />} onClick={() => printPaper('questions')}>打印题目卷</Button>
+          <Button icon={<Printer size={14} />} onClick={() => printPaper('answers')}>打印答案卷</Button>
+        </div>
       </header>
-      <div className="teacher-question-list">
-        {homework.questions.map((question) => (
-          <article className="teacher-question-card" key={question.id}>
-            <div className="teacher-question-meta">
-              <span>第 {question.number} 题</span>
-              <Tag bordered={false}>{question.points || 0} 分</Tag>
-              {question.figures.length > 0 && (
-                <small><ImageIcon size={12} /> 已关联 {question.figures.length} 幅题图</small>
-              )}
-              <small>原第 {question.page_start}{question.page_end !== question.page_start ? `–${question.page_end}` : ''} 页</small>
-            </div>
-            <div className="question-layout-stack">
-              {question.layout_images.length ? question.layout_images.map((asset) => (
-                <img key={asset.file} src={asset.url} alt={`第 ${question.number} 题原版布局`} />
-              )) : (
-                <div className="question-text-fallback">{question.prompt || '题目文本待补充'}</div>
-              )}
-            </div>
-            <div className="teacher-answer-panel">
-              <div><span>标准答案</span><p>{question.answer || '未识别到答案'}</p></div>
-              <div><span>评分标准</span><p>{question.rubric || '按标准答案判定'}</p></div>
-            </div>
-          </article>
-        ))}
-      </div>
+      <p className="homework-reflow-note">题干、选项与公式重新排版，题图作为独立素材插回原有顺序；不再使用题目截图或白块遮答案。</p>
+      <HomeworkPaper homework={homework} mode={mode} printable />
     </section>
   )
 }
@@ -279,8 +270,8 @@ export default function TeacherPage() {
         <section className="teacher-welcome">
           <div>
             <span className="teacher-eyebrow"><Sparkles size={14} /> AI HOMEWORK STUDIO</span>
-            <h1>布置作业，保留题册原貌。</h1>
-            <p>上传 PDF、照片或扫描版习题册，自动拆分题目与对应插图；学生只看到无答案原版布局，提交后由两级视觉模型批改与复核。</p>
+            <h1>布置作业，重排题目与答案。</h1>
+            <p>上传 PDF、照片或扫描版习题册，自动提取题干、选项、公式、题图与答案；分别生成可打印的题目卷和答案卷，提交后由两级视觉模型批改与复核。</p>
           </div>
           <Button type="primary" size="large" icon={<UploadCloud size={18} />} onClick={() => setUploadOpen(true)}>
             上传并创建作业
@@ -410,7 +401,7 @@ export default function TeacherPage() {
             </header>
 
             {detail.status === 'processing' && (
-              <div className="homework-processing-panel"><LoaderCircle className="spin" size={30} /><div><strong>{detail.processing_message || '正在逐页识别题目与答案区域'}</strong><span>进度 {detail.processing_progress || 0}% · 页面较多时需要几分钟，完成后可预览无答案学生版。</span></div></div>
+              <div className="homework-processing-panel"><LoaderCircle className="spin" size={30} /><div><strong>{detail.processing_message || '正在逐页提取题目、题图与答案'}</strong><span>进度 {detail.processing_progress || 0}% · 页面较多时需要几分钟，完成后可预览重排的题目卷和答案卷。</span></div></div>
             )}
             {detail.processing_error && <div className="homework-detail-error"><AlertTriangle size={18} /><div><strong>识别未完成</strong><span>{detail.processing_error}</span></div></div>}
             {detail.processing_warnings.length > 0 && <div className="homework-warnings">{detail.processing_warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>}

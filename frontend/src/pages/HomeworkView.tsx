@@ -9,14 +9,15 @@ import {
   Clock3,
   Eye,
   FileCheck2,
-  Image as ImageIcon,
   LoaderCircle,
+  Printer,
   RefreshCw,
   ShieldCheck,
   Sparkles,
   UploadCloud,
 } from 'lucide-react'
 import { fetchHomeworks, Homework, submitHomework } from '../lib/api'
+import HomeworkPaper from '../components/HomeworkPaper'
 
 const { Dragger } = Upload
 
@@ -143,7 +144,7 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
         <div className="student-homework-hero-copy">
           <span><Sparkles size={14} /> ASSIGNMENTS</span>
           <h1>我的作业</h1>
-          <p>查看老师发送的原版题目，完成后拍照提交答案。</p>
+          <p>查看老师发送的重排题目卷，完成后拍照提交答案。</p>
         </div>
         <div className="student-homework-progress">
           <div><strong>{progress.completed}</strong><small> / {progress.total}</small></div>
@@ -204,21 +205,15 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
           <div className="student-homework-detail">
             <header className="student-homework-detail-header">
               <div><span>HOMEWORK</span><h2>{detail.title}</h2><p>{detail.instructions || '请按题目要求完成作答'} · {formatDeadline(detail.due_at)} 截止</p></div>
-              <Tag color={detail.submission ? 'success' : 'gold'}>{detail.submission ? '已提交' : '待完成'}</Tag>
+              <div className="student-homework-detail-actions">
+                <Button icon={<Printer size={15} />} onClick={() => window.print()}>打印题目卷</Button>
+                <Tag color={detail.submission ? 'success' : 'gold'}>{detail.submission ? '已提交' : '待完成'}</Tag>
+              </div>
             </header>
 
             <section className="student-question-paper">
-              <div className="student-paper-notice"><ShieldCheck size={16} /><span>以下为老师发布的无答案原版题面；题图已与对应题目保留在一起。</span></div>
-              {detail.questions.map((question) => (
-                <article key={question.id} className="student-question-item">
-                  <header><span>第 {question.number} 题</span><Tag bordered={false}>{question.points || 0} 分</Tag>{question.figures.length > 0 && <small><ImageIcon size={12} /> {question.figures.length} 幅题图</small>}</header>
-                  <div className="student-layout-stack">
-                    {question.layout_images.length ? question.layout_images.map((asset) => (
-                      <img src={asset.url} alt={`第 ${question.number} 题`} key={asset.file} />
-                    )) : <p>{question.prompt}</p>}
-                  </div>
-                </article>
-              ))}
+              <div className="student-paper-notice"><ShieldCheck size={16} /><span>题干、选项和公式已按原卷层级重新排版，题图独立插回对应位置；本题目卷不含答案。</span></div>
+              <HomeworkPaper homework={detail} mode="questions" printable />
             </section>
 
             <section className="student-answer-submit">

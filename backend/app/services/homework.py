@@ -78,6 +78,32 @@ def _field_bboxes(item: dict[str, Any], plural: str, singular: str) -> list[list
     return _bbox_list(item.get(plural, item.get(singular, [])))
 
 
+def _normalize_options(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    result: list[dict[str, str]] = []
+    for index, option in enumerate(value):
+        if isinstance(option, dict):
+            label = _clean_text(option.get("label", ""), 12)
+            text = _clean_text(option.get("text", option.get("content", "")), 3000)
+        else:
+            label = chr(65 + index) if index < 26 else str(index + 1)
+            text = _clean_text(option, 3000)
+        if text:
+            result.append({"label": label or chr(65 + index), "text": text})
+    return result
+
+
+def _option_columns(value: Any) -> int:
+    columns = int(_as_float(value, 1))
+    return columns if columns in {1, 2, 4} else 1
+
+
+def _figure_position(value: Any) -> str:
+    position = _clean_text(value or "after_question", 40)
+    return position if position in {"before_question", "after_question", "after_options"} else "after_question"
+
+
 class HomeworkStore:
     """Durable single-course homework store with answer-safe public views."""
 
@@ -166,10 +192,16 @@ class HomeworkStore:
         result = {
             key: question.get(key)
             for key in (
-                "id", "number", "question_type", "prompt", "points",
+                "id", "section_key", "section_title", "number", "question_type",
+                "prompt", "options", "option_columns", "figure_position", "points",
                 "page_start", "page_end", "sequence",
             )
         }
+        result["section_key"] = result.get("section_key") or "questions"
+        result["section_title"] = result.get("section_title") or "题目"
+        result["options"] = _normalize_options(result.get("options"))
+        result["option_columns"] = _option_columns(result.get("option_columns"))
+        result["figure_position"] = _figure_position(result.get("figure_position"))
         result["layout_images"] = [
             self._asset_url(homework_id, item)
             for item in question.get("layout_images", [])
@@ -587,16 +619,17 @@ def _page_prompt(
     page: dict[str, Any], regions: list[dict[str, Any]], previous_items: list[dict[str, Any]]
 ) -> str:
     return f"""你是高校电路课程作业拆分器。当前是附件第 {page['page']} 页。
-目标：只提取题号、题目、题目所对应的图、标准答案和评分标准，并精确区分题干与答案。学生版必须隐藏所有答案。
+目标：把原卷结构化拆成可重新排版的题目卷和答案卷。只提取章节标题、题号、题干、选项、题目所对应的图、标准答案和评分标准，并精确区分题干与答案。不要把整页或题干截图当作学生题面。
 
 坐标要求：所有 bbox 使用当前整页图片的归一化坐标 [left,top,right,bottom]，范围 0-1000。
 拆分规则：
 1. question_key 必须在整份附件内唯一且稳定，例如“一-18”“二-2”“三-1”；key 后缀必须与页面印刷的顶层题号 number 一致。跨页连续题号（如上一页 3、本页 4）必须保持相同章节前缀；跨页续题沿用原 question_key，新题即使版式相似也绝不能复用上一题 key。
-2. question_bboxes 只框本页题干文字及必须保留的作答空白；figure_bboxes 单独框与该题对应的电路图、波形图或表格。
-3. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值（例如“___A____”必须单独框住 A）、答案汇总表、‘解：’之后的过程、评分说明。答案区域即使位于 question_bboxes 内也必须列出，以便白色遮盖；不能只框题目下方的选项而漏掉横线中已填内容。
-4. question_text 不得包含已经填入的答案；answer_text 保留标准答案与关键步骤；rubric 保留分值与评分点。
-5. 只有答案、没有新题干的页面片段，也要归入对应 question_key，但 question_bboxes 可为空。
-6. 图必须归到使用它的题目，不能成为独立题目。封面、考试说明、页眉页脚不要作为题目。
+2. question_text 要按原卷顺序保留公式、换行和小问层级，使用 Markdown + LaTeX；已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。选择题选项必须拆到 options，不能混在 question_text。
+3. section_key 是大题编号（如“一”“二”），section_title 是完整大题标题及计分说明；option_columns 按原卷选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
+4. question_bboxes 只用于定位题干，不会作为最终学生题面；figure_bboxes 必须单独精确框出该题真正引用的电路图、波形图或表格。
+5. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、‘解：’之后的过程、评分说明；answer_text 保留标准答案与关键步骤，rubric 保留分值与评分点。
+6. 只有答案、没有新题干的页面片段，也要归入对应 question_key，但 question_bboxes 可为空。
+7. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。封面、考试说明、页眉页脚不要作为题目。
 
 最近已出现的题目（用于判断跨页续接，不得覆盖页面上的新题号）：{json.dumps(previous_items[-12:], ensure_ascii=False)}
 PDF 原生文本（可能为空或错序）：
@@ -606,7 +639,7 @@ PDF-Extract-Kit 检测区域：
 {json.dumps(regions, ensure_ascii=False)}
 
 仅返回 JSON：
-{{"items":[{{"question_key":"二-1","number":"1","question_type":"choice|calculation|short_answer|design|other","question_text":"不含答案的完整题干或本页续接部分","points":10,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"标准答案/本页答案续接","rubric":"评分点"}}],"warnings":[]}}。"""
+{{"items":[{{"question_key":"二-1","section_key":"二","section_title":"二、计算题（共45分）","number":"1","question_type":"choice|calculation|short_answer|design|other","question_text":"不含答案和选项的完整题干或本页续接部分","options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":10,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"标准答案/本页答案续接","rubric":"评分点"}}],"warnings":[]}}。"""
 
 
 def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict[str, Any]]:
@@ -623,9 +656,14 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             continue
         result.append({
             "question_key": key,
+            "section_key": _clean_text(raw.get("section_key", ""), 40),
+            "section_title": _clean_text(raw.get("section_title", ""), 240),
             "number": number or key,
             "question_type": _clean_text(raw.get("question_type", "other"), 40) or "other",
             "question_text": _clean_text(raw.get("question_text", raw.get("prompt", ""))),
+            "options": _normalize_options(raw.get("options", [])),
+            "option_columns": _option_columns(raw.get("option_columns")),
+            "figure_position": _figure_position(raw.get("figure_position")),
             "points": max(0.0, _as_float(raw.get("points"))),
             "question_bboxes": _field_bboxes(raw, "question_bboxes", "question_bbox"),
             "figure_bboxes": _field_bboxes(raw, "figure_bboxes", "figure_bbox"),
@@ -750,12 +788,10 @@ def _save_question_assets(
     segments: list[dict[str, Any]],
     pages: dict[int, dict[str, Any]],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    layouts: list[dict[str, Any]] = []
     figures: list[dict[str, Any]] = []
     for segment_index, segment in enumerate(segments, 1):
-        question_boxes = segment["question_bboxes"]
         figure_boxes = segment["figure_bboxes"]
-        if not question_boxes and not figure_boxes:
+        if not figure_boxes:
             continue
         page = pages.get(int(segment["page"]))
         if not page:
@@ -763,48 +799,24 @@ def _save_question_assets(
         with Image.open(page["path"]) as source_image:
             image = source_image.convert("RGB")
             width, height = image.size
-            union_boxes = question_boxes + figure_boxes
-            pixel_boxes = [_pixel_bbox(bbox, width, height) for bbox in union_boxes]
-            left = max(0, min(bbox[0] for bbox in pixel_boxes) - 20)
-            top = max(0, min(bbox[1] for bbox in pixel_boxes) - 20)
-            right = min(width, max(bbox[2] for bbox in pixel_boxes) + 20)
-            bottom = min(height, max(bbox[3] for bbox in pixel_boxes) + 20)
-            if right <= left or bottom <= top:
-                continue
             sanitized = image.copy()
             draw = ImageDraw.Draw(sanitized)
             native_redactions = [
                 bbox
                 for bbox in page.get("native_answer_bboxes", [])
-                if any(_bbox_intersects(bbox, content_bbox) for content_bbox in union_boxes)
+                if any(_bbox_intersects(bbox, figure_bbox) for figure_bbox in figure_boxes)
             ]
             redaction_boxes = segment["answer_bboxes"] + native_redactions
             for answer_bbox in redaction_boxes:
                 answer_pixels = _pixel_bbox(answer_bbox, width, height)
                 draw.rectangle(answer_pixels, fill="white", outline="#e8eceb", width=2)
-            crop = Image.new("RGB", (right - left, bottom - top), "white")
-            for content_pixels in pixel_boxes:
-                content_left = max(0, content_pixels[0] - 8)
-                content_top = max(0, content_pixels[1] - 8)
-                content_right = min(width, content_pixels[2] + 8)
-                content_bottom = min(height, content_pixels[3] + 8)
-                content_crop = sanitized.crop(
-                    (content_left, content_top, content_right, content_bottom)
-                )
-                crop.paste(content_crop, (content_left - left, content_top - top))
-            layout_name = f"question-{sequence:03d}-{question_id[:8]}-part-{segment_index:02d}.png"
-            crop.save(assets_dir / layout_name, format="PNG", optimize=True)
-            layouts.append({
-                "file": layout_name,
-                "page": segment["page"],
-                "width": crop.width,
-                "height": crop.height,
-                "redactions_applied": len(redaction_boxes),
-                "native_redactions_applied": len(native_redactions),
-            })
             for figure_index, figure_bbox in enumerate(figure_boxes, 1):
                 figure_pixels = _pixel_bbox(figure_bbox, width, height)
-                figure_crop = sanitized.crop(figure_pixels)
+                left = max(0, figure_pixels[0] - 8)
+                top = max(0, figure_pixels[1] - 8)
+                right = min(width, figure_pixels[2] + 8)
+                bottom = min(height, figure_pixels[3] + 8)
+                figure_crop = sanitized.crop((left, top, right, bottom))
                 if figure_crop.width < 8 or figure_crop.height < 8:
                     continue
                 figure_name = (
@@ -817,8 +829,11 @@ def _save_question_assets(
                     "page": segment["page"],
                     "width": figure_crop.width,
                     "height": figure_crop.height,
+                    "source_top": figure_bbox[1],
+                    "source_left": figure_bbox[0],
+                    "position": segment.get("figure_position", "after_question"),
                 })
-    return layouts, figures
+    return [], figures
 
 
 def process_homework(
@@ -844,6 +859,11 @@ def process_homework(
         adapter = layout_adapter or PDFExtractKitAdapter()
         homework_dir = store._homework_dir(homework_id)
         assets_dir = homework_dir / "assets"
+        if assets_dir.exists():
+            resolved_assets = assets_dir.resolve()
+            if resolved_assets.parent != homework_dir.resolve() or resolved_assets.name != "assets":
+                raise RuntimeError("作业素材目录不安全")
+            shutil.rmtree(resolved_assets)
         assets_dir.mkdir(parents=True, exist_ok=True)
         processing_dir = homework_dir / "processing"
         if processing_dir.exists():
@@ -877,6 +897,7 @@ def process_homework(
             previous_items.extend({
                 "page": item["page"],
                 "key": item["question_key"],
+                "section": item["section_key"],
                 "number": item["number"],
                 "text_start": item["question_text"][:180],
             } for item in page_items)
@@ -907,10 +928,15 @@ def process_homework(
             key = item["question_key"]
             question = grouped.setdefault(key, {
                 "id": hashlib.sha256(f"{homework_id}|{key}".encode("utf-8")).hexdigest()[:32],
+                "section_key": key.rsplit("-", 1)[0] if "-" in key else item["section_key"],
+                "section_title": item["section_title"],
                 "number": item["number"],
                 "question_type": item["question_type"],
                 "points": item["points"],
                 "prompt_parts": [],
+                "options": [],
+                "option_columns": item["option_columns"],
+                "figure_position": item["figure_position"],
                 "answer_parts": [],
                 "rubric_parts": [],
                 "segments": [],
@@ -918,6 +944,17 @@ def process_homework(
             })
             if item["question_text"] and item["question_text"] not in question["prompt_parts"]:
                 question["prompt_parts"].append(item["question_text"])
+            if item["section_title"] and not question["section_title"]:
+                question["section_title"] = item["section_title"]
+            known_option_labels = {option["label"] for option in question["options"]}
+            for option in item["options"]:
+                if option["label"] not in known_option_labels:
+                    question["options"].append(option)
+                    known_option_labels.add(option["label"])
+            if item["option_columns"] > question["option_columns"]:
+                question["option_columns"] = item["option_columns"]
+            if item["figure_bboxes"]:
+                question["figure_position"] = item["figure_position"]
             if item["answer_text"] and item["answer_text"] not in question["answer_parts"]:
                 question["answer_parts"].append(item["answer_text"])
             if item["rubric"] and item["rubric"] not in question["rubric_parts"]:
@@ -942,9 +979,14 @@ def process_homework(
             questions.append({
                 "id": question["id"],
                 "sequence": sequence,
+                "section_key": question["section_key"],
+                "section_title": question["section_title"] or question["section_key"],
                 "number": question["number"],
                 "question_type": question["question_type"],
                 "prompt": "\n".join(question["prompt_parts"]).strip(),
+                "options": question["options"],
+                "option_columns": question["option_columns"],
+                "figure_position": question["figure_position"],
                 "points": question["points"],
                 "answer": "\n".join(question["answer_parts"]).strip(),
                 "rubric": "\n".join(question["rubric_parts"]).strip(),
@@ -964,7 +1006,7 @@ def process_homework(
             processing_error="",
             processing_warnings=list(dict.fromkeys(warnings))[:30],
             processing_progress=100,
-            processing_message="题目、插图和答案区域识别完成",
+            processing_message="题目卷与答案卷的结构化数据已生成",
         )
     except Exception as exc:
         logger.exception("Homework extraction failed for %s", homework_id)

@@ -52,9 +52,14 @@ def extracted_homework(store: HomeworkStore) -> tuple[str, str]:
             "items": [
                 {
                     "question_key": "一-1",
+                    "section_key": "一",
+                    "section_title": "一、计算题（共 10 分）",
                     "number": "1",
                     "question_type": "calculation",
-                    "question_text": "计算图示电路中的电流。",
+                    "question_text": "计算图示电路中的电流 $I$。",
+                    "options": [],
+                    "option_columns": 1,
+                    "figure_position": "after_question",
                     "points": 10,
                     "question_bboxes": [[50, 50, 950, 600]],
                     "figure_bboxes": [[120, 320, 430, 520]],
@@ -76,7 +81,7 @@ def extracted_homework(store: HomeworkStore) -> tuple[str, str]:
     return created["id"], raw["questions"][0]["id"]
 
 
-def test_extraction_preserves_layout_but_hides_answers_from_students(tmp_path):
+def test_extraction_reflows_text_and_keeps_only_independent_question_figures(tmp_path):
     store = HomeworkStore(tmp_path / "homework")
     homework_id, _ = extracted_homework(store)
 
@@ -84,14 +89,18 @@ def test_extraction_preserves_layout_but_hides_answers_from_students(tmp_path):
     assert teacher["status"] == "draft"
     assert teacher["questions"][0]["answer"] == "I = 2 mA"
     assert teacher["questions"][0]["rubric"] == "公式 4 分，结果 6 分"
+    assert teacher["questions"][0]["section_title"] == "一、计算题（共 10 分）"
+    assert teacher["questions"][0]["prompt"] == "计算图示电路中的电流 $I$。"
+    assert teacher["questions"][0]["options"] == []
+    assert teacher["questions"][0]["figure_position"] == "after_question"
+    assert teacher["questions"][0]["layout_images"] == []
     assert teacher["questions"][0]["figures"]
     assert store.list_homeworks(role="student", student_id="learner-test") == []
 
-    layout = store.asset_file(
-        homework_id, teacher["questions"][0]["layout_images"][0]["file"]
-    )
-    with Image.open(layout) as image:
-        assert image.getpixel((520, 170)) == (255, 255, 255)
+    figure = store.asset_file(homework_id, teacher["questions"][0]["figures"][0]["file"])
+    with Image.open(figure) as image:
+        assert image.width > 100
+        assert image.height > 100
 
     with pytest.raises(FileNotFoundError):
         store.asset_file(homework_id, "page-001.png")
@@ -102,6 +111,7 @@ def test_extraction_preserves_layout_but_hides_answers_from_students(tmp_path):
         homework_id, role="student", student_id="learner-test"
     )
     assert student["status"] == "published"
+    assert student["questions"][0]["layout_images"] == []
     assert "answer" not in student["questions"][0]
     assert "rubric" not in student["questions"][0]
     assert "source_url" not in student

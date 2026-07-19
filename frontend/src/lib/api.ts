@@ -169,13 +169,23 @@ export type HomeworkAsset = {
   size?: number
   content_type?: string
   redactions_applied?: number
+  source_top?: number
+  source_left?: number
+  position?: 'before_question' | 'after_question' | 'after_options' | string
 }
+
+export type HomeworkOption = { label: string; text: string }
 
 export type HomeworkQuestion = {
   id: string
+  section_key: string
+  section_title: string
   number: string
   question_type: string
   prompt: string
+  options: HomeworkOption[]
+  option_columns: number
+  figure_position: 'before_question' | 'after_question' | 'after_options' | string
   points: number
   page_start: number | null
   page_end: number | null
