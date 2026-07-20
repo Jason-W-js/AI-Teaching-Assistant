@@ -93,7 +93,7 @@ class Settings:
     remote_max_tokens: int = int(os.getenv("REMOTE_MAX_TOKENS", "8192"))
     remote_max_continuations: int = int(os.getenv("REMOTE_MAX_CONTINUATIONS", "2"))
     initial_chapter_limit: int = int(os.getenv("INITIAL_CHAPTER_LIMIT", "1"))
-    max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "80"))
+    max_upload_mb: int = int(os.getenv("MAX_UPLOAD_MB", "200"))
     max_attachment_mb: int = int(os.getenv("MAX_ATTACHMENT_MB", "20"))
     max_homework_upload_mb: int = int(os.getenv("MAX_HOMEWORK_UPLOAD_MB", "100"))
     max_homework_answer_images: int = int(

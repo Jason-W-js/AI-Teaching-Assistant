@@ -2509,7 +2509,7 @@ function StudentPageContent() {
             <p className="ant-upload-text">
               {newKbFile ? '重新选择首份资料' : '拖入教材，或点击选择文件'}
             </p>
-            <p className="ant-upload-hint">支持 PDF、Word、Markdown 和文本</p>
+            <p className="ant-upload-hint">支持 PDF、Word、Markdown 和文本，单个文件最大 200 MB</p>
           </Upload.Dragger>
           {newKbFile && (
             <div className="kb-selected-file" aria-label={`已选择 ${newKbFile.name}`}>
@@ -2611,7 +2611,7 @@ function StudentPageContent() {
           >
             <p className="ant-upload-drag-icon"><UploadCloud size={28} /></p>
             <p className="ant-upload-text">拖入新资料，或点击选择文件</p>
-            <p className="ant-upload-hint">文件将追加到“{currentKbDisplayName}”并触发重建</p>
+            <p className="ant-upload-hint">文件将追加到“{currentKbDisplayName}”并触发重建，单个文件最大 200 MB</p>
           </Upload.Dragger>
         </div>
         {(currentKbStatus?.state === 'building' || currentKbStatus?.state === 'cancelling') && (
