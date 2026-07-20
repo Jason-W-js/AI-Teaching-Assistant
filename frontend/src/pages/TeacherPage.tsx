@@ -223,15 +223,15 @@ function SubmissionPanel({
         </div>
         <div className="submission-status-actions">
           <Tag color={status.color}>{status.label}</Tag>
-          {(submission.status === 'submitted' || submission.status === 'error') && (
+          {(submission.status === 'submitted' || submission.status === 'error' || submission.status === 'review_required') && (
             <Button
               type="primary"
               size="small"
-              icon={submission.status === 'error' ? <RefreshCw size={13} /> : <Sparkles size={13} />}
+              icon={submission.status === 'submitted' ? <Sparkles size={13} /> : <RefreshCw size={13} />}
               loading={starting}
               onClick={() => onStartGrading(submission.id)}
             >
-              {submission.status === 'error' ? '重新批改' : '开始批改'}
+              {submission.status === 'submitted' ? '开始批改' : '重新批改'}
             </Button>
           )}
         </div>

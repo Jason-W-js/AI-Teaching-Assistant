@@ -16,6 +16,7 @@ from backend.app.services.homework import (
     _merge_prompt_parts,
     _native_inline_answer_bboxes,
     _normalize_document_metadata,
+    _normalize_grading,
     _normalized_page_items,
     _page_prompt,
     _page_review_prompt,
@@ -1270,6 +1271,156 @@ def test_submission_is_graded_then_independently_reviewed(tmp_path):
     assert reviewer.calls[0][2] == "image/jpeg"
     with pytest.raises(RuntimeError, match="已经完成批改"):
         store.start_submission_grading(submission["id"])
+
+
+def test_each_mapped_photo_question_is_graded_independently_even_with_reused_image(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    created = store.create_homework(
+        title="逐题图片批改",
+        instructions="",
+        due_at="",
+        filename="questions.png",
+        content_type="image/png",
+        data=sample_image_bytes(),
+    )
+    first_id = "1" * 32
+    fourth_id = "4" * 32
+    questions = [
+        {
+            "id": first_id,
+            "sequence": 1,
+            "number": "1",
+            "question_type": "calculation",
+            "prompt": "计算第一题。",
+            "answer": "第一题标准答案",
+            "points": 5,
+        },
+        {
+            "id": fourth_id,
+            "sequence": 2,
+            "number": "4",
+            "question_type": "calculation",
+            "prompt": "计算第四题。",
+            "answer": "第四题标准答案",
+            "points": 5,
+        },
+    ]
+    store.update_homework(created["id"], status="draft", questions=questions)
+    store.publish(created["id"])
+    reused_image = sample_image_bytes()
+    submission = store.create_submission(
+        homework_id=created["id"],
+        student_id="learner-test",
+        files=[
+            ("same-answer.png", "image/png", reused_image),
+            ("same-answer.png", "image/png", reused_image),
+        ],
+        answers=[
+            {"question_id": first_id, "answer": ""},
+            {"question_id": fourth_id, "answer": ""},
+        ],
+        file_question_ids=[first_id, fourth_id],
+    )
+    store.start_submission_grading(submission["id"])
+    grader = FakeVisionClient(
+        {
+            "extracted_answer": "第一题图片答案",
+            "items": [{
+                "question_id": first_id,
+                "student_answer": "第一题图片答案",
+                "score": 4,
+                "is_correct": False,
+                "feedback": "过程正确",
+                "evidence": "按步骤给分",
+            }],
+            "summary": "第一题已批改",
+        },
+        {
+            "extracted_answer": "第四题图片答案",
+            "items": [{
+                "question_id": fourth_id,
+                "student_answer": "第四题图片答案",
+                "score": 5,
+                "is_correct": True,
+                "feedback": "正确",
+                "evidence": "与标准答案一致",
+            }],
+            "summary": "第四题已批改",
+        },
+    )
+    reviewer = FakeVisionClient(
+        {"passed": True, "confidence": 0.96, "issues": [], "recommendation": ""},
+        {"passed": True, "confidence": 0.95, "issues": [], "recommendation": ""},
+    )
+
+    grade_submission(
+        store,
+        submission["id"],
+        grading_client=grader,
+        review_client=reviewer,
+    )
+
+    graded = store.get_raw_submission(submission["id"])
+    assert graded["status"] == "graded"
+    assert graded["grading"]["total_score"] == 9
+    assert [item["question_id"] for item in graded["grading"]["items"]] == [
+        first_id,
+        fourth_id,
+    ]
+    assert len(grader.calls) == 2
+    assert len(reviewer.calls) == 2
+    assert first_id in grader.calls[0][0] and fourth_id not in grader.calls[0][0]
+    assert fourth_id in grader.calls[1][0] and first_id not in grader.calls[1][0]
+    assert '"answer_source": "uploaded_images"' in grader.calls[0][0]
+    assert '"answer_source": "uploaded_images"' in grader.calls[1][0]
+    assert all(call[2] == "image/jpeg" for call in grader.calls + reviewer.calls)
+
+
+def test_grading_model_omission_requires_review_instead_of_claiming_unanswered():
+    first_id = "a" * 32
+    second_id = "b" * 32
+    homework = {
+        "questions": [
+            {"id": first_id, "number": "1", "points": 2},
+            {"id": second_id, "number": "2", "points": 8},
+        ]
+    }
+
+    result = _normalize_grading(
+        {
+            "items": [{
+                "question_id": first_id,
+                "student_answer": "A",
+                "score": 2,
+                "is_correct": True,
+            }],
+            "summary": "仅返回一题",
+        },
+        homework,
+    )
+
+    assert len(result["items"]) == 2
+    assert result["items"][1]["question_id"] == second_id
+    assert "不能据此判定学生未作答" in result["items"][1]["evidence"]
+    assert "模型漏回第 2 题" in result["summary"]
+
+
+def test_review_required_submission_can_be_regraded_by_teacher(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    homework_id, _question_id = extracted_homework(store)
+    store.publish(homework_id)
+    submission = store.create_submission(
+        homework_id=homework_id,
+        student_id="learner-test",
+        files=[("answer.png", "image/png", sample_image_bytes())],
+    )
+    store.update_submission(submission["id"], status="review_required")
+
+    restarted = store.start_submission_grading(submission["id"])
+
+    assert restarted["status"] == "grading"
+    assert restarted["grading"] is None
+    assert restarted["review"] is None
 
 
 def test_interrupted_processing_becomes_retryable_after_restart(tmp_path):

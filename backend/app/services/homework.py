@@ -17,7 +17,7 @@ from uuid import uuid4
 
 import fitz
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageOps
 
 from backend.app.config import settings
 from backend.app.rag.pdf_extract_kit import PDFExtractKitAdapter
@@ -1407,7 +1407,7 @@ class HomeworkStore:
             status = str(item.get("status", ""))
             if status == "grading":
                 raise RuntimeError("该份作业正在批改中")
-            if status not in {"submitted", "error"}:
+            if status not in {"submitted", "error", "review_required"}:
                 raise RuntimeError("该份作业已经完成批改，不能重复启动")
             timestamp = _now()
             item.update({
@@ -3617,7 +3617,7 @@ def _answer_contact_sheet(
         for entry in paths:
             path, label = entry if isinstance(entry, tuple) else (entry, "")
             with Image.open(path) as source:
-                image = source.convert("RGB")
+                image = ImageOps.exif_transpose(source).convert("RGB")
                 image.thumbnail((1600, 2200))
                 images.append(image.copy())
                 labels.append(_clean_text(label, 120))
@@ -3672,18 +3672,24 @@ def _grading_reference(homework: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _normalize_grading(value: dict[str, Any], homework: dict[str, Any]) -> dict[str, Any]:
-    references = {str(item.get("id")): item for item in homework.get("questions", [])}
+    question_order = [
+        item for item in homework.get("questions", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    references = {str(item.get("id")): item for item in question_order}
     raw_items = value.get("items", [])
-    items: list[dict[str, Any]] = []
+    normalized_by_id: dict[str, dict[str, Any]] = {}
     if isinstance(raw_items, list):
         for raw in raw_items:
             if not isinstance(raw, dict):
                 continue
             question_id = str(raw.get("question_id", ""))
-            reference = references.get(question_id, {})
+            reference = references.get(question_id)
+            if reference is None or question_id in normalized_by_id:
+                continue
             max_score = _as_float(reference.get("points"), _as_float(raw.get("max_score")))
             score = max(0.0, min(max_score, _as_float(raw.get("score"))))
-            items.append({
+            normalized_by_id[question_id] = {
                 "question_id": question_id,
                 "number": reference.get("number", raw.get("number", "")),
                 "student_answer": _clean_text(raw.get("student_answer", ""), 8000),
@@ -3692,14 +3698,36 @@ def _normalize_grading(value: dict[str, Any], homework: dict[str, Any]) -> dict[
                 "is_correct": _as_bool(raw.get("is_correct", score >= max_score and max_score > 0)),
                 "feedback": _clean_text(raw.get("feedback", ""), 2000),
                 "evidence": _clean_text(raw.get("evidence", ""), 2000),
-            })
+            }
+    missing_ids: list[str] = []
+    for reference in question_order:
+        question_id = str(reference.get("id"))
+        if question_id in normalized_by_id:
+            continue
+        missing_ids.append(question_id)
+        normalized_by_id[question_id] = {
+            "question_id": question_id,
+            "number": reference.get("number", ""),
+            "student_answer": "",
+            "score": 0.0,
+            "max_score": _as_float(reference.get("points")),
+            "is_correct": False,
+            "feedback": "批改模型未返回本题结果，需要教师复查",
+            "evidence": "模型输出缺少该题的 question_id，不能据此判定学生未作答",
+        }
+    items = [normalized_by_id[str(item.get("id"))] for item in question_order]
     total = round(sum(float(item["score"]) for item in items), 2)
     maximum = round(sum(_as_float(item.get("points")) for item in homework.get("questions", [])), 2)
+    summary = _clean_text(value.get("summary", ""), 2000)
+    if missing_ids:
+        missing_numbers = [str(references[item].get("number", "?")) for item in missing_ids]
+        suffix = f"模型漏回第 {'、'.join(missing_numbers[:20])} 题，已标记为需要教师复查。"
+        summary = f"{summary} {suffix}".strip()
     return {
         "items": items,
         "total_score": total,
         "max_score": maximum,
-        "summary": _clean_text(value.get("summary", ""), 2000),
+        "summary": summary,
     }
 
 
@@ -3714,6 +3742,138 @@ def _normalize_review(value: dict[str, Any]) -> dict[str, Any]:
         "recommendation": _clean_text(value.get("recommendation", ""), 2000),
         "review_model": settings.qwen_homework_review_model,
     }
+
+
+def _answer_has_direct_content(answer: dict[str, Any]) -> bool:
+    return bool(
+        _clean_text(answer.get("answer"), 12000)
+        or any(_clean_text(value, 120) for value in answer.get("selected_options", []))
+        or any(
+            _clean_text(part.get("text"), 12000)
+            for part in answer.get("subquestion_answers", [])
+            if isinstance(part, dict)
+        )
+    )
+
+
+def _grading_student_payload(
+    questions: list[dict[str, Any]],
+    submission: dict[str, Any],
+    image_assets: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    answers_by_id = {
+        str(item.get("question_id")): item
+        for item in submission.get("answers", [])
+        if isinstance(item, dict) and item.get("question_id")
+    }
+    images_by_id: dict[str, list[dict[str, Any]]] = {}
+    for asset in image_assets:
+        images_by_id.setdefault(str(asset.get("question_id", "")), []).append(asset)
+    result: list[dict[str, Any]] = []
+    for question in questions:
+        question_id = str(question.get("id", ""))
+        answer = answers_by_id.get(question_id, {})
+        images = images_by_id.get(question_id, [])
+        if not images and len(questions) == 1:
+            images = images_by_id.get("", [])
+        item: dict[str, Any] = {
+            "question_id": question_id,
+            "number": question.get("number", ""),
+            "question_type": _question_type(question.get("question_type")),
+            "answer_source": "uploaded_images" if images else (
+                "direct_input" if _answer_has_direct_content(answer) else "unanswered"
+            ),
+        }
+        selected_options = [
+            _clean_text(value, 120)
+            for value in answer.get("selected_options", [])
+            if _clean_text(value, 120)
+        ]
+        direct_answer = _clean_text(answer.get("answer"), 12000)
+        subquestion_answers = [
+            {
+                "label": _clean_text(part.get("label"), 80),
+                "text": _clean_text(part.get("text"), 12000),
+            }
+            for part in answer.get("subquestion_answers", [])
+            if isinstance(part, dict) and _clean_text(part.get("text"), 12000)
+        ]
+        if selected_options:
+            item["selected_options"] = selected_options
+        if direct_answer:
+            item["direct_answer"] = direct_answer
+        if subquestion_answers:
+            item["subquestion_answers"] = subquestion_answers
+        if images:
+            item["image_count"] = len(images)
+            item["uploaded_images"] = [
+                {
+                    "file": asset.get("file", ""),
+                    "question_id": asset.get("question_id", ""),
+                    "question_number": asset.get("question_number", ""),
+                }
+                for asset in images
+            ]
+        result.append(item)
+    return result
+
+
+def _submission_grading_batches(
+    homework: dict[str, Any], submission: dict[str, Any]
+) -> list[dict[str, Any]]:
+    questions = [
+        item for item in homework.get("questions", [])
+        if isinstance(item, dict) and item.get("id")
+    ]
+    question_ids = {str(item.get("id")) for item in questions}
+    answer_images = [
+        item for item in submission.get("answer_images", [])
+        if isinstance(item, dict) and item.get("file")
+    ]
+    legacy_images = [
+        item for item in answer_images
+        if str(item.get("question_id", "")) not in question_ids
+    ]
+    if legacy_images:
+        # Older submissions did not associate each image with a question. Keep a
+        # single compatibility batch so no historical answer image is discarded.
+        return [{"questions": questions, "images": answer_images}]
+
+    images_by_question: dict[str, list[dict[str, Any]]] = {}
+    for asset in answer_images:
+        images_by_question.setdefault(str(asset.get("question_id", "")), []).append(asset)
+
+    batches: list[dict[str, Any]] = []
+    direct_questions: list[dict[str, Any]] = []
+    for question in questions:
+        question_id = str(question.get("id"))
+        images = images_by_question.get(question_id, [])
+        if images:
+            # The same uploaded image may intentionally be reused by several
+            # questions; every question_id is still graded independently.
+            batches.append({"questions": [question], "images": images})
+        else:
+            direct_questions.append(question)
+    for offset in range(0, len(direct_questions), 8):
+        batches.append({
+            "questions": direct_questions[offset:offset + 8],
+            "images": [],
+        })
+    return batches
+
+
+def _unique_texts(values: Iterable[Any], limit: int = 30) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = _clean_text(value, 2000)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def grade_submission(
@@ -3746,59 +3906,150 @@ def grade_submission(
             )
             owned_reviewer = True
         submission_dir = store.root / "submissions" / submission_id
-        answer_paths = [
-            (
-                submission_dir / item["file"],
-                _clean_text(item.get("question_number"), 80),
+        batches = _submission_grading_batches(homework, submission)
+        if not batches:
+            raise RuntimeError("作业中没有可批改的题目")
+        all_items: list[dict[str, Any]] = []
+        grading_summaries: list[str] = []
+        extracted_parts: list[str] = []
+        batch_reviews: list[dict[str, Any]] = []
+        forced_review_issues: list[str] = []
+        for batch_index, batch in enumerate(batches, 1):
+            batch_questions = batch["questions"]
+            batch_images = batch["images"]
+            batch_homework = {**homework, "questions": batch_questions}
+            reference = _grading_reference(batch_homework)
+            student_payload = _grading_student_payload(
+                batch_questions, submission, batch_images
             )
-            for item in submission.get("answer_images", [])
-        ]
-        contact_sheet = (
-            _answer_contact_sheet(
-                answer_paths, submission_dir / "answer-contact-sheet.jpg"
+            answer_paths = [
+                (
+                    submission_dir / str(asset["file"]),
+                    "number={number}; question_id={question_id}; file={file}".format(
+                        number=_clean_text(asset.get("question_number"), 80) or "?",
+                        question_id=_clean_text(asset.get("question_id"), 80) or "unassigned",
+                        file=_clean_text(asset.get("file"), 120),
+                    ),
+                )
+                for asset in batch_images
+            ]
+            contact_sheet = (
+                _answer_contact_sheet(
+                    answer_paths,
+                    submission_dir / f"answer-contact-sheet-{batch_index:02d}.jpg",
+                )
+                if answer_paths
+                else None
             )
-            if answer_paths
-            else None
-        )
-        reference = _grading_reference(homework)
-        structured_answers = submission.get("answers", [])
-        grading_prompt = (
-            """你是高校电路课程阅卷教师。识别学生手写答案，并严格依据标准答案和评分点逐题评分。
-不得因字迹风格扣分；计算题应按步骤给分；没有作答的题得 0 分；不要臆测图片中看不清的内容。
-学生直接填写或选择的结构化答案是该题的权威作答；图片标题中的 Question 编号表示图片所属题目。
-只返回 JSON：{"extracted_answer":"完整转写","items":[{"question_id":"...","number":"...","student_answer":"...","score":0,"max_score":0,"is_correct":false,"feedback":"...","evidence":"判分依据"}],"summary":"总评"}。
-题目、标准答案与评分标准：\n"""
-            + json.dumps(reference, ensure_ascii=False)
-            + "\n学生结构化逐题答案：\n"
-            + json.dumps(structured_answers, ensure_ascii=False)
-        )
-        grading_image_kwargs = (
-            {
-                "image_bytes": contact_sheet.read_bytes(),
-                "image_mime": "image/jpeg",
+            image_kwargs = (
+                {
+                    "image_bytes": contact_sheet.read_bytes(),
+                    "image_mime": "image/jpeg",
+                }
+                if contact_sheet is not None
+                else {}
+            )
+            grading_prompt = (
+                """你是高校电路课程阅卷教师。识别学生答案，并严格依据标准答案和评分点逐题评分。
+不得因字迹风格扣分；计算题应按步骤给分；看不清的内容不得臆测。
+本批次只含下列题目。必须为每道题返回且仅返回一个 item，并原样复制其 question_id。
+answer_source=direct_input 时，非空的选择、填空或文字是该题的直接作答。
+answer_source=uploaded_images 时，表示学生已经拍照作答；即使 direct_answer 为空，也绝不能判定为“未作答”，必须查看随请求提供的图片并转写、评分。
+图片标题同时给出 question_id、题号和文件名；question_id 是唯一关联依据，题号可能在不同大题组中重复。
+同一张图片允许被学生用于多道题；当前请求只按本批次的题目独立判断，不做重复图片检测。
+只有 answer_source=unanswered 且确实没有图片或非空直接答案时，才可判定未作答。
+只返回 JSON：{"extracted_answer":"完整转写","items":[{"question_id":"...","number":"...","student_answer":"...","score":0,"max_score":0,"is_correct":false,"feedback":"...","evidence":"判分依据"}],"summary":"本批总评"}。
+本批题目、标准答案与评分标准：
+"""
+                + json.dumps(reference, ensure_ascii=False)
+                + "\n学生逐题作答来源：\n"
+                + json.dumps(student_payload, ensure_ascii=False)
+            )
+            grading_result = grading_client.complete_json(
+                grading_prompt,
+                **image_kwargs,
+            )
+            batch_grading = _normalize_grading(grading_result, batch_homework)
+            all_items.extend(batch_grading["items"])
+            if batch_grading.get("summary"):
+                grading_summaries.append(str(batch_grading["summary"]))
+            extracted = _clean_text(grading_result.get("extracted_answer", ""), 32000)
+            if extracted:
+                extracted_parts.append(extracted)
+
+            returned_ids = {
+                str(item.get("question_id"))
+                for item in grading_result.get("items", [])
+                if isinstance(item, dict) and item.get("question_id")
             }
-            if contact_sheet is not None
-            else {}
+            expected_ids = {str(item.get("id")) for item in batch_questions}
+            missing_ids = expected_ids - returned_ids
+            if missing_ids:
+                missing_numbers = [
+                    str(item.get("number", "?"))
+                    for item in batch_questions
+                    if str(item.get("id")) in missing_ids
+                ]
+                forced_review_issues.append(
+                    f"批改模型漏回第 {'、'.join(missing_numbers)} 题，不能判定为学生未作答"
+                )
+
+            review_result = review_client.complete_json(
+                """你是独立的作业批改审查员。请结合随请求提供的学生答案图片，检查前一模型的答案转写、步骤分和得分。
+answer_source=uploaded_images 表示学生已经提交了该题答案图片，不得因为结构化文字为空而称其“未作答”。
+question_id 是图片与题目的唯一关联依据，题号可重复；同一图片也可合理地用于多道题。
+前一模型若漏题、错识、错判未作答、加总错误或扣分不合理，passed=false 并逐条说明。
+必须检查本批次每道题。只返回 JSON：{"passed":true,"confidence":0.0,"issues":[],"recommendation":""}。
+本批题目、标准答案与评分标准：
+"""
+                + json.dumps(reference, ensure_ascii=False)
+                + "\n学生逐题作答来源：\n"
+                + json.dumps(student_payload, ensure_ascii=False)
+                + "\n前一模型本批批改结果：\n"
+                + json.dumps(batch_grading, ensure_ascii=False),
+                **image_kwargs,
+            )
+            batch_reviews.append(_normalize_review(review_result))
+
+        item_order = {
+            str(item.get("id")): index
+            for index, item in enumerate(homework.get("questions", []))
+            if isinstance(item, dict) and item.get("id")
+        }
+        all_items.sort(key=lambda item: item_order.get(str(item.get("question_id")), 10**9))
+        grading = {
+            "items": all_items,
+            "total_score": round(sum(_as_float(item.get("score")) for item in all_items), 2),
+            "max_score": round(
+                sum(_as_float(item.get("points")) for item in homework.get("questions", [])),
+                2,
+            ),
+            "summary": "；".join(_unique_texts(grading_summaries, limit=20)),
+        }
+        review_issues = _unique_texts(
+            [
+                issue
+                for review in batch_reviews
+                for issue in review.get("issues", [])
+            ]
+            + forced_review_issues
         )
-        grading_result = grading_client.complete_json(
-            grading_prompt,
-            **grading_image_kwargs,
+        recommendations = _unique_texts(
+            review.get("recommendation", "") for review in batch_reviews
         )
-        grading = _normalize_grading(grading_result, homework)
-        extracted_answer = _clean_text(grading_result.get("extracted_answer", ""), 32000)
-        review_result = review_client.complete_json(
-            """你是独立的作业批改审查员。检查前一模型对学生答案的识别、逐题得分、步骤分和总分是否与标准答案及评分标准一致。
-发现任何漏题、错读、加总错误或不合理扣分时 passed=false，并逐条说明；不要重新发明评分标准。
-只返回 JSON：{"passed":true,"confidence":0.0,"issues":[],"recommendation":""}。
-标准答案与评分标准：\n"""
-            + json.dumps(reference, ensure_ascii=False)
-            + "\n学生结构化逐题答案：\n"
-            + json.dumps(structured_answers, ensure_ascii=False)
-            + "\n前一模型批改结果：\n"
-            + json.dumps(grading, ensure_ascii=False),
-            **grading_image_kwargs,
-        )
-        review = _normalize_review(review_result)
+        review = {
+            "passed": bool(batch_reviews)
+            and all(review.get("passed", False) for review in batch_reviews)
+            and not forced_review_issues,
+            "confidence": min(
+                (_as_float(review.get("confidence")) for review in batch_reviews),
+                default=0.0,
+            ),
+            "issues": review_issues,
+            "recommendation": "；".join(recommendations),
+            "review_model": settings.qwen_homework_review_model,
+        }
+        extracted_answer = "\n\n".join(extracted_parts)
         status = "graded" if review["passed"] else "review_required"
         store.update_submission(
             submission_id,
