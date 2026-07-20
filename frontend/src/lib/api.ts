@@ -158,7 +158,7 @@ export type ScheduleItemDraft = Pick<ScheduleItem, 'title' | 'date' | 'time' | '
 
 export type HomeworkStatus = 'processing' | 'draft' | 'published' | 'error'
 export type QuestionBankStatus = 'processing' | 'ready' | 'error'
-export type HomeworkSubmissionStatus = 'grading' | 'graded' | 'review_required' | 'error'
+export type HomeworkSubmissionStatus = 'submitted' | 'grading' | 'graded' | 'review_required' | 'error'
 
 export type HomeworkAsset = {
   file: string
@@ -771,6 +771,17 @@ export async function submitHomework(
     { method: 'POST', body: data },
   )
   const result = await homeworkResponse<{ submission: HomeworkSubmission }>(response, '答案提交失败')
+  return result.submission
+}
+
+export async function startHomeworkSubmissionGrading(
+  submissionId: string,
+): Promise<HomeworkSubmission> {
+  const response = await fetch(
+    `/api/homework-submissions/${encodeURIComponent(submissionId)}/grade`,
+    { method: 'POST' },
+  )
+  const result = await homeworkResponse<{ submission: HomeworkSubmission }>(response, '开始批改失败')
   return result.submission
 }
 

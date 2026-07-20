@@ -1224,6 +1224,11 @@ def test_submission_is_graded_then_independently_reviewed(tmp_path):
         student_id="learner-test",
         files=[("answer.png", "image/png", sample_image_bytes())],
     )
+    assert submission["status"] == "submitted"
+    started = store.start_submission_grading(submission["id"])
+    assert started["status"] == "grading"
+    with pytest.raises(RuntimeError, match="正在批改"):
+        store.start_submission_grading(submission["id"])
     grader = FakeVisionClient(
         {
             "extracted_answer": "第 1 题：I = 2 mA",
@@ -1263,6 +1268,8 @@ def test_submission_is_graded_then_independently_reviewed(tmp_path):
     assert graded["review"]["passed"] is True
     assert grader.calls[0][2] == "image/jpeg"
     assert reviewer.calls[0][2] == "image/jpeg"
+    with pytest.raises(RuntimeError, match="已经完成批改"):
+        store.start_submission_grading(submission["id"])
 
 
 def test_interrupted_processing_becomes_retryable_after_restart(tmp_path):

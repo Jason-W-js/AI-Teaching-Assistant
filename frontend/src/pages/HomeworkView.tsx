@@ -169,6 +169,14 @@ function formatDeadline(value: string) {
 function StudentGrading({ homework }: { homework: Homework }) {
   const submission = homework.submission
   if (!submission) return null
+  if (submission.status === 'submitted') {
+    return (
+      <div className="student-grading-wait teacher-pending">
+        <Clock3 size={24} />
+        <div><strong>答案已提交，等待老师开始批改</strong><span>老师确认提交内容后，将启动 AI 评分和独立复核。</span></div>
+      </div>
+    )
+  }
   if (submission.status === 'grading') {
     return (
       <div className="student-grading-wait">
@@ -178,7 +186,7 @@ function StudentGrading({ homework }: { homework: Homework }) {
     )
   }
   if (submission.status === 'error') {
-    return <div className="student-grading-error"><AlertTriangle size={17} />{submission.processing_error || '自动批改失败，请联系老师'}</div>
+    return <div className="student-grading-error"><AlertTriangle size={17} />{submission.processing_error || '批改未完成，等待老师重新开始批改'}</div>
   }
   const grading = submission.grading
   if (!grading) return null
@@ -237,12 +245,15 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
   }, [studentId])
 
   useEffect(() => { void load(true) }, [load])
-  const grading = homeworks.some((homework) => homework.submission?.status === 'grading')
+  const gradingInProgress = homeworks.some((homework) => homework.submission?.status === 'grading')
+  const waitingForTeacher = homeworks.some((homework) => (
+    homework.submission?.status === 'submitted' || homework.submission?.status === 'error'
+  ))
   useEffect(() => {
-    if (!grading) return
-    const timer = window.setInterval(() => void load(), 2800)
+    if (!gradingInProgress && !waitingForTeacher) return
+    const timer = window.setInterval(() => void load(), gradingInProgress ? 2800 : 6000)
     return () => window.clearInterval(timer)
-  }, [grading, load])
+  }, [gradingInProgress, waitingForTeacher, load])
 
   const detail = homeworks.find((homework) => homework.id === detailId) || null
   const progress = useMemo(() => ({
@@ -293,7 +304,7 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
     try {
       await submitHomework(detail.id, studentId, structuredAnswers, mappedFiles)
       setQuestionFiles({})
-      message.success('答案已提交，正在自动批改与复核')
+      message.success('答案已提交，等待老师开始批改')
       await load()
     } catch (error) {
       message.error(error instanceof Error ? error.message : '提交失败')
@@ -336,9 +347,11 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
                   <span className="student-homework-icon"><FileCheck2 size={20} /></span>
                   {submission?.status === 'grading' ? (
                     <Tag color="processing" icon={<LoaderCircle className="spin" size={12} />}>批改中</Tag>
+                  ) : submission?.status === 'submitted' ? (
+                    <Tag color="gold" icon={<Clock3 size={12} />}>待老师批改</Tag>
                   ) : submission ? (
-                    <Tag color={submission.status === 'review_required' ? 'warning' : 'success'}>
-                      {submission.status === 'review_required' ? '待教师复查' : '已提交'}
+                    <Tag color={submission.status === 'review_required' ? 'warning' : submission.status === 'error' ? 'error' : 'success'}>
+                      {submission.status === 'review_required' ? '待教师复查' : submission.status === 'error' ? '批改失败' : '已批改'}
                     </Tag>
                   ) : <Tag color="gold">待完成</Tag>}
                 </header>
@@ -373,7 +386,9 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
               <div><span>HOMEWORK</span><h2>{detail.title}</h2><p>{detail.instructions || '请按题目要求完成作答'} · {formatDeadline(detail.due_at)} 截止</p></div>
               <div className="student-homework-detail-actions">
                 <Button icon={<Printer size={15} />} onClick={() => window.print()}>打印作业</Button>
-                <Tag color={detail.submission ? 'success' : 'gold'}>{detail.submission ? '已提交' : '待完成'}</Tag>
+                <Tag color={detail.submission?.status === 'submitted' ? 'gold' : detail.submission?.status === 'grading' ? 'processing' : detail.submission?.status === 'review_required' ? 'warning' : detail.submission?.status === 'error' ? 'error' : detail.submission ? 'success' : 'gold'}>
+                  {detail.submission?.status === 'submitted' ? '待老师批改' : detail.submission?.status === 'grading' ? '批改中' : detail.submission?.status === 'review_required' ? '待教师复查' : detail.submission?.status === 'error' ? '批改失败' : detail.submission ? '已批改' : '待完成'}
+                </Tag>
               </div>
             </header>
 
@@ -408,7 +423,7 @@ export default function HomeworkView({ studentId }: { studentId: string }) {
                 })}
               </div>
               <Button type="primary" size="large" block icon={<Camera size={17} />} loading={submitting} onClick={() => void submit()}>
-                {detail.submission ? '重新提交并批改' : '提交答案并开始批改'}
+                {detail.submission ? '重新提交答案' : '提交答案'}
               </Button>
             </section>
 

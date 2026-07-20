@@ -724,6 +724,8 @@ button { color: inherit; }
 .student-grading-wait div { display: flex; flex-direction: column; }
 .student-grading-wait strong { font-size: 11px; }
 .student-grading-wait span { color: #78908b; font-size: 9px; }
+.student-grading-wait.teacher-pending { color: #9b6726; background: #fff7e9; border-color: #ecd8b2; }
+.student-grading-wait.teacher-pending span { color: #9b7b55; }
 .student-grading-error { color: #aa513e; background: #fff4f1; border-color: #f1d2ca; }
 .student-grade-report > header { display: flex; align-items: center; gap: 18px; }
 .student-grade-report > header > div { display: flex; flex-direction: column; }
@@ -967,11 +969,18 @@ button { color: inherit; }
 .teacher-submission-card > header > div:nth-child(2) { display: flex; flex: 1; flex-direction: column; }
 .teacher-submission-card > header strong { color: #355a56; font-size: 10px; }
 .teacher-submission-card > header span { color: #839590; font-size: 8px; }
+.submission-status-actions { display: flex; align-items: center; gap: 7px; }
+.submission-status-actions .ant-tag { margin-inline-end: 0; }
+.submission-status-actions .ant-btn-primary { background: #14766e; box-shadow: 0 5px 12px rgba(20,118,110,.16); }
 .submission-body { padding: 14px; }
 .submission-images { display: flex; gap: 9px; overflow-x: auto; }
 .submission-images a { position: relative; display: block; overflow: hidden; border-radius: 9px; }
 .submission-images img { width: 145px; height: 110px; display: block; object-fit: cover; border: 1px solid #dce5e3; border-radius: 9px; }
 .submission-images a span { position: absolute; right: 5px; bottom: 5px; display: flex; align-items: center; gap: 3px; padding: 4px 6px; color: #fff; background: rgba(17,54,54,.76); border-radius: 5px; font-size: 7px; }
+.submission-ready { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 13px 14px; color: #9a641f; background: #fff7e8; border: 1px solid #ecd7ad; border-radius: 9px; }
+.submission-ready > div { display: flex; flex-direction: column; }
+.submission-ready strong { color: #81501c; font-size: 9px; }
+.submission-ready span { color: #9b754b; font-size: 8px; }
 .submission-processing { display: flex; align-items: center; gap: 10px; margin-top: 12px; padding: 14px; color: #27766f; background: #edf7f4; border-radius: 9px; }
 .submission-processing strong, .submission-processing span { display: block; }
 .submission-processing strong { font-size: 9px; }

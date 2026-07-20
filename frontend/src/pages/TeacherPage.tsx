@@ -46,6 +46,7 @@ import {
   QuestionBank,
   reprocessQuestionBank,
   reprocessHomework,
+  startHomeworkSubmissionGrading,
   updateDocumentQuestion,
   uploadDocumentQuestionAsset,
 } from '../lib/api'
@@ -75,6 +76,7 @@ const homeworkStatus = {
 } as const
 
 const submissionStatus = {
+  submitted: { label: '等待教师批改', color: 'gold' },
   grading: { label: '自动批改中', color: 'processing' },
   graded: { label: '双模型复核通过', color: 'success' },
   review_required: { label: '需要教师复查', color: 'warning' },
@@ -197,7 +199,15 @@ function QuestionPreview({
   )
 }
 
-function SubmissionPanel({ submission }: { submission: HomeworkSubmission }) {
+function SubmissionPanel({
+  submission,
+  starting,
+  onStartGrading,
+}: {
+  submission: HomeworkSubmission
+  starting: boolean
+  onStartGrading: (submissionId: string) => void
+}) {
   const status = submissionStatus[submission.status]
   const grading = submission.grading
   const scorePercent = grading?.max_score
@@ -211,7 +221,20 @@ function SubmissionPanel({ submission }: { submission: HomeworkSubmission }) {
           <strong>{submission.student_name || '学生 1'}</strong>
           <span>{formatTime(submission.created_at)} 提交 · {submission.answers?.length || 0} 道结构化答案 · {submission.answer_images.length} 张图片</span>
         </div>
-        <Tag color={status.color}>{status.label}</Tag>
+        <div className="submission-status-actions">
+          <Tag color={status.color}>{status.label}</Tag>
+          {(submission.status === 'submitted' || submission.status === 'error') && (
+            <Button
+              type="primary"
+              size="small"
+              icon={submission.status === 'error' ? <RefreshCw size={13} /> : <Sparkles size={13} />}
+              loading={starting}
+              onClick={() => onStartGrading(submission.id)}
+            >
+              {submission.status === 'error' ? '重新批改' : '开始批改'}
+            </Button>
+          )}
+        </div>
       </header>
       <div className="submission-body">
         {submission.answers?.length > 0 && (
@@ -232,6 +255,12 @@ function SubmissionPanel({ submission }: { submission: HomeworkSubmission }) {
             </a>
           ))}
         </div>
+        {submission.status === 'submitted' && (
+          <div className="submission-ready">
+            <Clock3 size={20} />
+            <div><strong>学生答案已就绪</strong><span>请检查提交内容，确认后点击“开始批改”。</span></div>
+          </div>
+        )}
         {submission.status === 'grading' && (
           <div className="submission-processing">
             <LoaderCircle className="spin" size={24} />
@@ -581,6 +610,7 @@ export default function TeacherPage() {
   const [bankActionId, setBankActionId] = useState('')
   const [deletingQuestionId, setDeletingQuestionId] = useState('')
   const [editingQuestion, setEditingQuestion] = useState<EditableQuestionContext | null>(null)
+  const [gradingSubmissionId, setGradingSubmissionId] = useState('')
 
   const applyEditedDocument = (document: Homework | QuestionBank) => {
     if (editingQuestion?.kind === 'homework') {
@@ -623,11 +653,10 @@ export default function TeacherPage() {
       || homework.submissions?.some((submission) => submission.status === 'grading'),
     )
   useEffect(() => {
-    if (!hasRunningTask) return
     const timer = window.setInterval(() => {
       void loadHomeworks()
       void loadQuestionBanks()
-    }, 2800)
+    }, hasRunningTask ? 2800 : 6000)
     return () => window.clearInterval(timer)
   }, [hasRunningTask, loadHomeworks, loadQuestionBanks])
 
@@ -640,8 +669,10 @@ export default function TeacherPage() {
     total: homeworks.length,
     published: homeworks.filter((item) => item.status === 'published').length,
     submissions: homeworks.reduce((total, item) => total + (item.submission_count || 0), 0),
-    review: homeworks.reduce(
-      (total, item) => total + (item.submissions || []).filter((submission) => submission.status === 'review_required').length,
+    attention: homeworks.reduce(
+      (total, item) => total + (item.submissions || []).filter(
+        (submission) => submission.status === 'submitted' || submission.status === 'review_required',
+      ).length,
       0,
     ),
   }), [homeworks])
@@ -653,6 +684,19 @@ export default function TeacherPage() {
     setTitle('')
     setInstructions('')
     setDueAt('')
+  }
+
+  const startSubmissionGrading = async (submissionId: string) => {
+    setGradingSubmissionId(submissionId)
+    try {
+      await startHomeworkSubmissionGrading(submissionId)
+      message.success('已开始批改，完成后将自动复核')
+      await loadHomeworks()
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : '开始批改失败')
+    } finally {
+      setGradingSubmissionId('')
+    }
   }
 
   const submitHomework = async () => {
@@ -804,7 +848,7 @@ export default function TeacherPage() {
           <article><span><BookOpenCheck size={18} /></span><div><strong>{stats.total}</strong><small>全部作业</small></div></article>
           <article><span><Send size={18} /></span><div><strong>{stats.published}</strong><small>已发布</small></div></article>
           <article><span><FileCheck2 size={18} /></span><div><strong>{stats.submissions}</strong><small>学生提交</small></div></article>
-          <article className={stats.review ? 'needs-attention' : ''}><span><ShieldCheck size={18} /></span><div><strong>{stats.review}</strong><small>待人工复查</small></div></article>
+          <article className={stats.attention ? 'needs-attention' : ''}><span><ShieldCheck size={18} /></span><div><strong>{stats.attention}</strong><small>待教师处理</small></div></article>
         </section>
 
         <section className="question-bank-library">
@@ -1136,7 +1180,12 @@ export default function TeacherPage() {
             <section className="teacher-submission-section">
               <header className="teacher-section-heading"><div><span>SUBMISSIONS</span><h3>学生提交与批改</h3></div><small>当前演示为 1 名学生</small></header>
               {detail.submissions?.length ? detail.submissions.map((submission) => (
-                <SubmissionPanel key={submission.id} submission={submission} />
+                <SubmissionPanel
+                  key={submission.id}
+                  submission={submission}
+                  starting={gradingSubmissionId === submission.id}
+                  onStartGrading={(submissionId) => void startSubmissionGrading(submissionId)}
+                />
               )) : <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="学生尚未提交答案" />}
             </section>
           </div>

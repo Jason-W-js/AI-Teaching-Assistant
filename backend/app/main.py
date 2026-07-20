@@ -1322,7 +1322,6 @@ async def get_homework_asset(homework_id: str, asset_name: str) -> FileResponse:
 @app.post("/api/homeworks/{homework_id}/submissions")
 async def submit_homework(
     homework_id: str,
-    background_tasks: BackgroundTasks,
     files: list[UploadFile] | None = File(None),
     student_id: str = Form(...),
     answers: str = Form(""),
@@ -1383,11 +1382,34 @@ async def submit_homework(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    background_tasks.add_task(grade_submission, homework_store, str(submission["id"]))
     return {
         "ok": True,
         "submission": submission,
-        "message": "答案已提交，qwen3-vl-plus 正在批改，随后由 qwen3-vl-flash 复核",
+        "message": "答案已提交，等待老师开始批改",
+    }
+
+
+@app.post("/api/homework-submissions/{submission_id}/grade")
+async def start_homework_submission_grading(
+    submission_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    try:
+        submission = await asyncio.to_thread(
+            homework_store.start_submission_grading,
+            submission_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    background_tasks.add_task(grade_submission, homework_store, submission_id)
+    return {
+        "ok": True,
+        "submission": submission,
+        "message": "已开始批改，完成后将自动进行独立复核",
     }
 
 

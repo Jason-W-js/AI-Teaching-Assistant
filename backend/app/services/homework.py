@@ -378,7 +378,7 @@ class HomeworkStore:
                 if submission.get("status") == "grading":
                     submission.update({
                         "status": "error",
-                        "processing_error": "服务重启导致批改任务中断，请重新提交答案",
+                        "processing_error": "服务重启导致批改任务中断，请由老师重新开始批改",
                         "updated_at": _now(),
                     })
                     changed = True
@@ -1352,7 +1352,7 @@ class HomeworkStore:
             "homework_id": homework_id,
             "student_id": student_id,
             "student_name": "学生 1",
-            "status": "grading",
+            "status": "submitted",
             "answers": normalized_answers,
             "answer_images": images,
             "extracted_answer": "",
@@ -1392,6 +1392,35 @@ class HomeworkStore:
             item.update(updates)
             item["updated_at"] = _now()
             self._write(state)
+
+    def start_submission_grading(self, submission_id: str) -> dict[str, Any]:
+        """Atomically move a teacher-selected submission into the grading queue."""
+        self.validate_submission_id(submission_id)
+        with self._lock:
+            state = self._read()
+            item = next(
+                (value for value in state["submissions"] if value.get("id") == submission_id),
+                None,
+            )
+            if item is None:
+                raise FileNotFoundError("学生提交不存在")
+            status = str(item.get("status", ""))
+            if status == "grading":
+                raise RuntimeError("该份作业正在批改中")
+            if status not in {"submitted", "error"}:
+                raise RuntimeError("该份作业已经完成批改，不能重复启动")
+            timestamp = _now()
+            item.update({
+                "status": "grading",
+                "extracted_answer": "",
+                "grading": None,
+                "review": None,
+                "processing_error": "",
+                "grading_started_at": timestamp,
+                "updated_at": timestamp,
+            })
+            self._write(state)
+            return self._public_submission(item)
 
     def submission_file(self, submission_id: str, filename: str) -> Path:
         self.validate_submission_id(submission_id)
