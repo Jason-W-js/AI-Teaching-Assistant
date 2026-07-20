@@ -15,6 +15,7 @@ from backend.app.services.homework import (
     _native_inline_answer_bboxes,
     _normalized_page_items,
     _page_prompt,
+    _repair_figure_assignments,
     _split_labeled_text,
     grade_submission,
     process_homework,
@@ -73,6 +74,8 @@ def extracted_homework(store: HomeworkStore) -> tuple[str, str]:
                     "figure_bboxes": [[120, 320, 430, 520]],
                     "figure_captions": ["图1.3"],
                     "answer_bboxes": [[450, 150, 650, 250]],
+                    "answer_figure_bboxes": [[450, 150, 650, 250]],
+                    "answer_figure_captions": ["答案图"],
                     "answer_text": "I = 2 mA",
                     "rubric": "公式 4 分，结果 6 分",
                 }
@@ -105,6 +108,8 @@ def test_extraction_reflows_text_and_keeps_only_independent_question_figures(tmp
     assert teacher["questions"][0]["layout_images"] == []
     assert teacher["questions"][0]["figures"]
     assert teacher["questions"][0]["figures"][0]["caption"] == "图1.3"
+    assert teacher["questions"][0]["answer_figures"]
+    assert teacher["questions"][0]["answer_figures"][0]["caption"] == "答案图"
     assert store.list_homeworks(role="student", student_id="learner-test") == []
 
     figure = store.asset_file(homework_id, teacher["questions"][0]["figures"][0]["file"])
@@ -123,6 +128,7 @@ def test_extraction_reflows_text_and_keeps_only_independent_question_figures(tmp
     assert student["status"] == "published"
     assert student["questions"][0]["layout_images"] == []
     assert "answer" not in student["questions"][0]
+    assert "answer_figures" not in student["questions"][0]
     assert "rubric" not in student["questions"][0]
     assert "source_url" not in student
 
@@ -142,6 +148,139 @@ def test_legacy_question_figures_infer_labels_from_question_text(tmp_path):
         "图1.3",
         "图4-2（a）",
     ]
+
+
+def test_cross_page_figures_are_reassigned_by_nearby_native_captions():
+    left_figure = [151.0, 102.0, 423.0, 209.0]
+    right_figure = [462.0, 96.0, 847.0, 207.0]
+    items = [
+        {
+            "question_key": "一-17",
+            "section_key": "一",
+            "section_title": "一、选择题",
+            "number": "17",
+            "question_type": "choice",
+            "question_text": "滞回比较器电路如图1.1所示，判断错误说法。",
+            "subquestions": [],
+            "options": [],
+            "option_columns": 2,
+            "figure_position": "after_question",
+            "points": 2,
+            "question_bboxes": [],
+            "figure_bboxes": [],
+            "figure_captions": [],
+            "answer_bboxes": [],
+            "answer_figure_bboxes": [],
+            "answer_figure_captions": [],
+            "answer_text": "B",
+            "answer_subquestions": [],
+            "rubric": "",
+            "page": 2,
+        },
+        {
+            "question_key": "一-18",
+            "section_key": "一",
+            "section_title": "一、选择题",
+            "number": "18",
+            "question_type": "choice",
+            "question_text": "图1.2所示交流等效电路中，求密勒电容。",
+            "subquestions": [],
+            "options": [],
+            "option_columns": 4,
+            "figure_position": "before_question",
+            "points": 2,
+            "question_bboxes": [],
+            "figure_bboxes": [left_figure, right_figure],
+            "figure_captions": [],
+            "answer_bboxes": [],
+            "answer_figure_bboxes": [],
+            "answer_figure_captions": [],
+            "answer_text": "A",
+            "answer_subquestions": [],
+            "rubric": "",
+            "page": 3,
+        },
+    ]
+    pages = {
+        2: {"native_figure_captions": []},
+        3: {
+            "native_figure_captions": [
+                {"caption": "图1.1", "bbox": [257.0, 218.0, 306.0, 231.0]},
+                {"caption": "图1.2", "bbox": [614.0, 218.0, 663.0, 231.0]},
+            ]
+        },
+    }
+
+    repaired, warnings = _repair_figure_assignments(items, pages)
+
+    question_18 = next(item for item in repaired if item["question_key"] == "一-18")
+    question_17_continuation = next(
+        item
+        for item in repaired
+        if item["question_key"] == "一-17" and item["page"] == 3
+    )
+    assert question_18["figure_bboxes"] == [right_figure]
+    assert question_18["figure_captions"] == ["图1.2"]
+    assert question_17_continuation["question_text"] == ""
+    assert question_17_continuation["figure_bboxes"] == [left_figure]
+    assert question_17_continuation["figure_captions"] == ["图1.1"]
+    assert any("改归第17题" in warning for warning in warnings)
+
+
+def test_later_answer_diagram_is_removed_from_student_figures():
+    prompt = (
+        "请使用运放和合适的电阻设计T形反馈网络反相放大电路，并画出相应电路图。"
+        "要求输入电阻为100kΩ，电压增益为-100，同时满足直流平衡条件。"
+    )
+    answer_diagram = [540.0, 94.0, 841.0, 224.0]
+    base = {
+        "question_key": "三-2",
+        "section_key": "三",
+        "section_title": "三、设计题",
+        "number": "2",
+        "question_type": "design",
+        "subquestions": [],
+        "options": [],
+        "option_columns": 1,
+        "figure_position": "before_question",
+        "points": 5,
+        "question_bboxes": [],
+        "figure_captions": [],
+        "answer_bboxes": [],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+        "answer_subquestions": [],
+        "rubric": "",
+    }
+    items = [
+        {
+            **base,
+            "question_text": prompt,
+            "figure_bboxes": [],
+            "answer_figure_bboxes": [],
+            "answer_figure_captions": [],
+            "answer_text": "",
+            "page": 9,
+        },
+        {
+            **base,
+            "question_text": prompt,
+            "figure_bboxes": [answer_diagram],
+            "answer_figure_bboxes": [],
+            "answer_figure_captions": [],
+            "answer_text": "本题无标准答案，按设计步骤与电路图评分。",
+            "page": 10,
+        },
+    ]
+
+    repaired, warnings = _repair_figure_assignments(
+        items, {9: {"native_figure_captions": []}, 10: {"native_figure_captions": []}}
+    )
+
+    answer_segment = next(item for item in repaired if item["page"] == 10)
+    assert answer_segment["figure_bboxes"] == []
+    assert answer_segment["answer_figure_bboxes"] == [answer_diagram]
+    assert any("答案图已从学生题面移除" in warning for warning in warnings)
 
 
 def test_submission_is_graded_then_independently_reviewed(tmp_path):
@@ -467,6 +606,8 @@ def test_page_prompt_filters_book_explanations_and_requires_structured_subquesti
     assert "question_text 与 subquestions" in prompt
     assert "answer_text 与 answer_subquestions" in prompt
     assert "figure_captions 与 figure_bboxes" in prompt
+    assert "answer_figure_bboxes" in prompt
+    assert "答案页画出的电路绝不能进入 figure_bboxes" in prompt
     assert '"figure_captions":["图1.3"]' in prompt
     assert "题目卷" not in prompt
 

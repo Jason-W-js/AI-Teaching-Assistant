@@ -359,14 +359,20 @@ class HomeworkStore:
         inferred_captions = _infer_figure_captions(
             _compose_labeled_text(result.get("prompt"), result.get("subquestions"))
         )
-        for index, figure in enumerate(result["figures"]):
-            if not _clean_text(figure.get("caption"), 160) and index < len(inferred_captions):
-                figure["caption"] = inferred_captions[index]
+        if len(result["figures"]) == len(inferred_captions):
+            for index, figure in enumerate(result["figures"]):
+                if not _clean_text(figure.get("caption"), 160):
+                    figure["caption"] = inferred_captions[index]
         if include_answers:
             result["answer"] = str(question.get("answer", ""))
             result["answer_subquestions"] = _normalize_labeled_parts(
                 question.get("answer_subquestions")
             )
+            result["answer_figures"] = [
+                self._asset_url(homework_id, item)
+                for item in question.get("answer_figures", [])
+                if isinstance(item, dict) and item.get("file")
+            ]
             result["rubric"] = str(question.get("rubric", ""))
         return result
 
@@ -689,6 +695,7 @@ def _render_source(source_path: Path, assets_dir: Path) -> list[dict[str, Any]]:
                     "width": pixmap.width,
                     "height": pixmap.height,
                     "native_answer_bboxes": _native_inline_answer_bboxes(page),
+                    "native_figure_captions": _native_figure_captions(page),
                 })
             return pages
         finally:
@@ -704,6 +711,7 @@ def _render_source(source_path: Path, assets_dir: Path) -> list[dict[str, Any]]:
             "width": image.width,
             "height": image.height,
             "native_answer_bboxes": [],
+            "native_figure_captions": [],
         }]
 
 
@@ -777,6 +785,33 @@ def _normalized_regions(
     return result[:120]
 
 
+def _native_figure_captions(page: fitz.Page) -> list[dict[str, Any]]:
+    """Read standalone vector-text figure labels and retain their page coordinates."""
+    page_width = max(float(page.rect.width), 1.0)
+    page_height = max(float(page.rect.height), 1.0)
+    result: list[dict[str, Any]] = []
+    for word in page.get_text("words"):
+        if len(word) < 5:
+            continue
+        raw_text = _clean_text(word[4], 80).rstrip("：:。")
+        match = _FIGURE_REFERENCE_PATTERN.fullmatch(raw_text)
+        if not match:
+            continue
+        captions = _infer_figure_captions(raw_text)
+        if not captions:
+            continue
+        result.append({
+            "caption": captions[0],
+            "bbox": [
+                round(float(word[0]) / page_width * 1000, 2),
+                round(float(word[1]) / page_height * 1000, 2),
+                round(float(word[2]) / page_width * 1000, 2),
+                round(float(word[3]) / page_height * 1000, 2),
+            ],
+        })
+    return result[:120]
+
+
 def _page_prompt(
     page: dict[str, Any], regions: list[dict[str, Any]], previous_items: list[dict[str, Any]]
 ) -> str:
@@ -797,9 +832,9 @@ def _page_prompt(
 8. question_text 只能转录当前页面肉眼可见的题干，不得从“最近已出现的题目”复制、改写或补全题干。若当前页只有上一题的题图、答案或评分过程，question_text 必须为空。
 9. 使用 Markdown + LaTeX。所有电路变量、下标、希腊字母、单位和算式都必须放在 $...$ 中，例如 $\\beta=150$、$V_{{T}}=26\\,\\mathrm{{mV}}$、$V_{{BE(on)}}=0.7\\,\\mathrm{{V}}$、$r'_{{bb}}=100\\,\\Omega$、$R_{{B1}}=60\\,\\mathrm{{k}}\\Omega$、$A_{{v1}}=v_o/v_i$。禁止输出裸露的 V_T、R_B1、r_bb'、26mV 或 4kΩ。
 10. 已填写答案的横线改回纯空白“______”，不得把答案字符写进题干。section_key 是大题、章节或习题组编号，section_title 是对应标题；没有明确分值时 points 返回 0。option_columns 按原页选项排布返回 1、2 或 4；figure_position 返回 before_question、after_question 或 after_options。
-11. question_bboxes 只框题干与小问；figure_bboxes 必须单独精确框出题目引用的电路图、波形图或表格，不要把图号文字裁进图中。figure_captions 与 figure_bboxes 按顺序一一对应，只填写原文图号/图注，例如“图1.3”；即使图号只出现在“如图1.3所示”的题干引用中，也必须返回“图1.3”。答案中新增的推导图、页眉装饰图不要放入题目 figure_bboxes。
-12. answer_bboxes 必须框出本页所有会泄露答案的区域，包括填在横线中的字母/数值、答案汇总表、“解：”之后的过程和评分说明；rubric 只保留明确的评分点。
-13. 图必须归到使用它的题目，不能成为独立题目；若同一行有相邻题目的图，只框本题引用的图。
+11. question_bboxes 只框题干与小问；figure_bboxes 只能框学生作答前就应看到的已知电路图、波形图或表格，不要把图号文字裁进图中。figure_captions 与 figure_bboxes 按顺序一一对应，只填写原文图号/图注，例如“图1.3”；即使图号只出现在上一页题干的“如图1.3所示”中，也必须为该题返回一个 question_text 为空的续接片段，并把图归给原 question_key。
+12. answer_bboxes 必须框出本页所有会泄露答案的文字区域；answer_figure_bboxes 单独框出“解：/答案”中才出现的结果图、设计图、推导图和参考电路图，并用 answer_figure_captions 对齐图号。题目要求学生“画出/绘制/设计电路图”且原题没有提供“图x.x/如图/下图”时，答案页画出的电路绝不能进入 figure_bboxes。rubric 只保留明确的评分点。
+13. 图必须归到实际引用它的题目，不能成为独立题目；同一页相邻的“图1.1”“图1.2”必须根据各题题干引用分别归属，不能全部放进当前题。页眉装饰图不要返回。
 
 最近已出现的题目（用于判断跨页续接，不得覆盖页面上的新题号）：{json.dumps(previous_items[-12:], ensure_ascii=False)}
 PDF 原生文本（可能为空或错序）：
@@ -809,7 +844,7 @@ PDF-Extract-Kit 检测区域：
 {json.dumps(regions, ensure_ascii=False)}
 
 仅返回 JSON：
-{{"items":[{{"question_key":"1.4-1.2.1","section_key":"1.4","section_title":"1.4 习题解答","number":"1.2.1","question_type":"choice|calculation|short_answer|design|other","question_text":"所有小问共享的题干","subquestions":[{{"label":"1","text":"第一个小问"}},{{"label":"2","text":"第二个小问"}}],"options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"figure_captions":["图1.3"],"answer_bboxes":[[0,0,1000,1000]],"answer_text":"所有小问共享的答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}},{{"label":"2","text":"第二问答案"}}],"rubric":"明确评分点"}}],"warnings":[]}}。"""
+{{"items":[{{"question_key":"1.4-1.2.1","section_key":"1.4","section_title":"1.4 习题解答","number":"1.2.1","question_type":"choice|calculation|short_answer|design|other","question_text":"所有小问共享的题干","subquestions":[{{"label":"1","text":"第一个小问"}},{{"label":"2","text":"第二个小问"}}],"options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"figure_captions":["图1.3"],"answer_bboxes":[[0,0,1000,1000]],"answer_figure_bboxes":[[0,0,1000,1000]],"answer_figure_captions":[""],"answer_text":"所有小问共享的答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}},{{"label":"2","text":"第二问答案"}}],"rubric":"明确评分点"}}],"warnings":[]}}。"""
 
 
 def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict[str, Any]]:
@@ -844,6 +879,12 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             if isinstance(raw_figure_captions, list)
             else []
         )
+        raw_answer_figure_captions = raw.get("answer_figure_captions", [])
+        answer_figure_captions = (
+            [_clean_text(caption, 160) for caption in raw_answer_figure_captions]
+            if isinstance(raw_answer_figure_captions, list)
+            else []
+        )
         result.append({
             "question_key": key,
             "section_key": _clean_text(raw.get("section_key", ""), 40),
@@ -860,6 +901,10 @@ def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict
             "figure_bboxes": _field_bboxes(raw, "figure_bboxes", "figure_bbox"),
             "figure_captions": figure_captions,
             "answer_bboxes": _field_bboxes(raw, "answer_bboxes", "answer_bbox"),
+            "answer_figure_bboxes": _field_bboxes(
+                raw, "answer_figure_bboxes", "answer_figure_bbox"
+            ),
+            "answer_figure_captions": answer_figure_captions,
             "answer_text": answer_text,
             "answer_subquestions": answer_subquestions,
             "rubric": _clean_text(raw.get("rubric", raw.get("scoring", ""))),
@@ -1054,6 +1099,183 @@ def _bbox_intersects(left: list[float], right: list[float]) -> bool:
     )
 
 
+def _bbox_overlap_ratio(left: list[float], right: list[float]) -> float:
+    overlap_width = max(0.0, min(left[2], right[2]) - max(left[0], right[0]))
+    overlap_height = max(0.0, min(left[3], right[3]) - max(left[1], right[1]))
+    area = max(1.0, (left[2] - left[0]) * (left[3] - left[1]))
+    return overlap_width * overlap_height / area
+
+
+def _nearby_native_figure_caption(
+    page: dict[str, Any] | None, figure_bbox: list[float]
+) -> str:
+    if not page:
+        return ""
+    figure_center = (figure_bbox[0] + figure_bbox[2]) / 2
+    candidates: list[tuple[float, str]] = []
+    for raw in page.get("native_figure_captions", []):
+        if not isinstance(raw, dict):
+            continue
+        caption_bbox = raw.get("bbox")
+        caption = _clean_text(raw.get("caption"), 160)
+        if not isinstance(caption_bbox, list) or len(caption_bbox) != 4 or not caption:
+            continue
+        vertical_gap = float(caption_bbox[1]) - figure_bbox[3]
+        caption_center = (float(caption_bbox[0]) + float(caption_bbox[2])) / 2
+        if vertical_gap < -12 or vertical_gap > 120:
+            continue
+        if caption_center < figure_bbox[0] - 100 or caption_center > figure_bbox[2] + 100:
+            continue
+        score = max(0.0, vertical_gap) * 4 + abs(caption_center - figure_center)
+        candidates.append((score, caption))
+    return min(candidates, default=(0.0, ""), key=lambda item: item[0])[1]
+
+
+def _repair_figure_assignments(
+    items: list[dict[str, Any]], pages: dict[int, dict[str, Any]]
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Repair cross-page figure ownership and keep answer-only diagrams off student pages."""
+    if not items:
+        return items, []
+
+    templates: dict[str, dict[str, Any]] = {}
+    first_pages: dict[str, int] = {}
+    primary_texts: dict[str, str] = {}
+    reference_targets: dict[str, dict[str, dict[str, Any]]] = {}
+    for item in items:
+        key = str(item["question_key"])
+        templates.setdefault(key, item)
+        first_pages[key] = min(first_pages.get(key, int(item["page"])), int(item["page"]))
+        composed = _compose_labeled_text(item.get("question_text"), item.get("subquestions"))
+        if len(_comparison_text(composed)) > len(_comparison_text(primary_texts.get(key, ""))):
+            primary_texts[key] = composed
+        for caption in _infer_figure_captions(composed):
+            reference_targets.setdefault(caption, {})[key] = item
+
+    continuations: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for item in items:
+        figure_boxes = item.get("figure_bboxes", [])
+        if not figure_boxes:
+            continue
+        explicit_captions = item.get("figure_captions", [])
+        if not isinstance(explicit_captions, list):
+            explicit_captions = []
+        kept_boxes: list[list[float]] = []
+        kept_captions: list[str] = []
+        answer_boxes = item.setdefault("answer_figure_bboxes", [])
+        answer_captions = item.setdefault("answer_figure_captions", [])
+        key = str(item["question_key"])
+        page_number = int(item["page"])
+        current_text = _compose_labeled_text(
+            item.get("question_text"), item.get("subquestions")
+        )
+        current_compact = _comparison_text(current_text)
+        primary_compact = _comparison_text(primary_texts.get(key, ""))
+        duplicated_question = (
+            page_number > first_pages[key]
+            and len(current_compact) >= 80
+            and (
+                current_compact in primary_compact
+                or SequenceMatcher(
+                    None, current_compact, primary_compact, autojunk=False
+                ).ratio() >= 0.72
+            )
+        )
+        prompt_requests_drawing = bool(
+            re.search(r"(?:画出|绘制|作出|补全).{0,24}(?:电路图|波形图|示意图|图)", primary_texts.get(key, ""))
+        )
+        prompt_has_given_figure = bool(
+            _infer_figure_captions(primary_texts.get(key, ""))
+            or re.search(r"(?:如图|下图|图示|图中|所给.{0,8}图)", primary_texts.get(key, ""))
+        )
+        answer_evidence = bool(item.get("answer_text") or item.get("answer_bboxes"))
+
+        for figure_index, figure_bbox in enumerate(figure_boxes):
+            explicit_caption = (
+                _clean_text(explicit_captions[figure_index], 160)
+                if figure_index < len(explicit_captions)
+                else ""
+            )
+            explicit_labels = _infer_figure_captions(explicit_caption)
+            caption = explicit_labels[0] if explicit_labels else explicit_caption
+            if not caption:
+                caption = _nearby_native_figure_caption(
+                    pages.get(page_number), figure_bbox
+                )
+            overlaps_answer = any(
+                _bbox_overlap_ratio(figure_bbox, answer_bbox) >= 0.45
+                for answer_bbox in item.get("answer_bboxes", [])
+            )
+            answer_continuation = (
+                page_number > first_pages[key]
+                and answer_evidence
+                and not caption
+                and (
+                    duplicated_question
+                    or (prompt_requests_drawing and not prompt_has_given_figure)
+                )
+            )
+            if overlaps_answer or answer_continuation:
+                answer_boxes.append(figure_bbox)
+                answer_captions.append(caption)
+                warnings.append(
+                    f"第{page_number}页第{item['number']}题的答案图已从学生题面移除"
+                )
+                continue
+
+            possible_targets = reference_targets.get(caption, {}) if caption else {}
+            if possible_targets:
+                target_key = min(
+                    possible_targets,
+                    key=lambda candidate: (
+                        abs(first_pages[candidate] - page_number),
+                        first_pages[candidate] > page_number,
+                    ),
+                )
+            else:
+                target_key = key
+            if target_key != key:
+                target = templates[target_key]
+                continuations.append({
+                    "question_key": target_key,
+                    "section_key": target.get("section_key", ""),
+                    "section_title": target.get("section_title", ""),
+                    "number": target.get("number", target_key),
+                    "question_type": target.get("question_type", "other"),
+                    "question_text": "",
+                    "subquestions": [],
+                    "options": [],
+                    "option_columns": 1,
+                    "figure_position": (
+                        "after_question"
+                        if page_number >= first_pages[target_key]
+                        else target.get("figure_position", "before_question")
+                    ),
+                    "points": target.get("points", 0),
+                    "question_bboxes": [],
+                    "figure_bboxes": [figure_bbox],
+                    "figure_captions": [caption],
+                    "answer_bboxes": [],
+                    "answer_figure_bboxes": [],
+                    "answer_figure_captions": [],
+                    "answer_text": "",
+                    "answer_subquestions": [],
+                    "rubric": "",
+                    "page": page_number,
+                })
+                warnings.append(
+                    f"第{page_number}页{caption or '题图'}已从第{item['number']}题改归第{target['number']}题"
+                )
+                continue
+            kept_boxes.append(figure_bbox)
+            kept_captions.append(caption)
+        item["figure_bboxes"] = kept_boxes
+        item["figure_captions"] = kept_captions
+
+    return items + continuations, list(dict.fromkeys(warnings))
+
+
 def _save_question_assets(
     *,
     assets_dir: Path,
@@ -1061,11 +1283,13 @@ def _save_question_assets(
     sequence: int,
     segments: list[dict[str, Any]],
     pages: dict[int, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[dict[str, Any]]]:
     figures: list[dict[str, Any]] = []
+    answer_figures: list[dict[str, Any]] = []
     for segment_index, segment in enumerate(segments, 1):
         figure_boxes = segment["figure_bboxes"]
-        if not figure_boxes:
+        answer_figure_boxes = segment.get("answer_figure_bboxes", [])
+        if not figure_boxes and not answer_figure_boxes:
             continue
         page = pages.get(int(segment["page"]))
         if not page:
@@ -1073,6 +1297,9 @@ def _save_question_assets(
         explicit_captions = segment.get("figure_captions", [])
         if not isinstance(explicit_captions, list):
             explicit_captions = []
+        explicit_answer_captions = segment.get("answer_figure_captions", [])
+        if not isinstance(explicit_answer_captions, list):
+            explicit_answer_captions = []
         inferred_captions = _infer_figure_captions(
             _compose_labeled_text(segment.get("question_text"), segment.get("subquestions"))
         )
@@ -1090,41 +1317,73 @@ def _save_question_assets(
             for answer_bbox in redaction_boxes:
                 answer_pixels = _pixel_bbox(answer_bbox, width, height)
                 draw.rectangle(answer_pixels, fill="white", outline="#e8eceb", width=2)
-            for figure_index, figure_bbox in enumerate(figure_boxes, 1):
-                figure_pixels = _pixel_bbox(figure_bbox, width, height)
-                left = max(0, figure_pixels[0] - 8)
-                top = max(0, figure_pixels[1] - 8)
-                right = min(width, figure_pixels[2] + 8)
-                bottom = min(height, figure_pixels[3] + 8)
-                figure_crop = sanitized.crop((left, top, right, bottom))
-                if figure_crop.width < 8 or figure_crop.height < 8:
-                    continue
-                figure_name = (
-                    f"question-{sequence:03d}-{question_id[:8]}-figure-"
-                    f"{segment_index:02d}-{figure_index:02d}.png"
-                )
-                figure_crop.save(assets_dir / figure_name, format="PNG", optimize=True)
-                figure_asset = {
-                    "file": figure_name,
-                    "page": segment["page"],
-                    "width": figure_crop.width,
-                    "height": figure_crop.height,
-                    "source_top": figure_bbox[1],
-                    "source_left": figure_bbox[0],
-                    "position": segment.get("figure_position", "after_question"),
-                }
-                caption_index = figure_index - 1
-                caption = (
-                    _clean_text(explicit_captions[caption_index], 160)
-                    if caption_index < len(explicit_captions)
-                    else ""
-                )
-                if not caption and caption_index < len(inferred_captions):
-                    caption = inferred_captions[caption_index]
-                if caption:
-                    figure_asset["caption"] = caption
-                figures.append(figure_asset)
-    return [], figures
+
+            def save_boxes(
+                boxes: list[list[float]],
+                captions: list[Any],
+                *,
+                source: Image.Image,
+                kind: str,
+                destination: list[dict[str, Any]],
+            ) -> None:
+                for figure_index, figure_bbox in enumerate(boxes, 1):
+                    figure_pixels = _pixel_bbox(figure_bbox, width, height)
+                    left = max(0, figure_pixels[0] - 8)
+                    top = max(0, figure_pixels[1] - 8)
+                    right = min(width, figure_pixels[2] + 8)
+                    bottom = min(height, figure_pixels[3] + 8)
+                    figure_crop = source.crop((left, top, right, bottom))
+                    if figure_crop.width < 8 or figure_crop.height < 8:
+                        continue
+                    figure_name = (
+                        f"question-{sequence:03d}-{question_id[:8]}-{kind}-"
+                        f"{segment_index:02d}-{figure_index:02d}.png"
+                    )
+                    figure_crop.save(assets_dir / figure_name, format="PNG", optimize=True)
+                    figure_asset = {
+                        "file": figure_name,
+                        "page": segment["page"],
+                        "width": figure_crop.width,
+                        "height": figure_crop.height,
+                        "source_top": figure_bbox[1],
+                        "source_left": figure_bbox[0],
+                        "position": (
+                            segment.get("figure_position", "after_question")
+                            if kind == "figure"
+                            else "before_answer"
+                        ),
+                    }
+                    caption_index = figure_index - 1
+                    caption = (
+                        _clean_text(captions[caption_index], 160)
+                        if caption_index < len(captions)
+                        else ""
+                    )
+                    if (
+                        kind == "figure"
+                        and not caption
+                        and len(boxes) == len(inferred_captions)
+                    ):
+                        caption = inferred_captions[caption_index]
+                    if caption:
+                        figure_asset["caption"] = caption
+                    destination.append(figure_asset)
+
+            save_boxes(
+                figure_boxes,
+                explicit_captions,
+                source=sanitized,
+                kind="figure",
+                destination=figures,
+            )
+            save_boxes(
+                answer_figure_boxes,
+                explicit_answer_captions,
+                source=image,
+                kind="answer-figure",
+                destination=answer_figures,
+            )
+    return [], figures, answer_figures
 
 
 def process_homework(
@@ -1240,6 +1499,10 @@ def process_homework(
         warnings.extend(consolidation_warnings)
         if not all_items:
             raise RuntimeError("附件中没有识别到可直接布置的独立题目")
+        all_items, figure_assignment_warnings = _repair_figure_assignments(
+            all_items, page_map
+        )
+        warnings.extend(figure_assignment_warnings)
         choice_items: dict[str, list[dict[str, Any]]] = {}
         for item in all_items:
             if _question_type(item["question_type"]) == "choice":
@@ -1312,7 +1575,7 @@ def process_homework(
             sorted(grouped.values(), key=lambda item: int(item["first_seen"])), 1
         ):
             segments = question["segments"]
-            layouts, figures = _save_question_assets(
+            layouts, figures, answer_figures = _save_question_assets(
                 assets_dir=assets_dir,
                 question_id=question["id"],
                 sequence=sequence,
@@ -1346,6 +1609,7 @@ def process_homework(
                 "page_end": pages_used[-1] if pages_used else None,
                 "layout_images": layouts,
                 "figures": figures,
+                "answer_figures": answer_figures,
                 "source_segments": segments,
             })
         max_score = round(sum(float(item.get("points", 0)) for item in questions), 2)
@@ -1359,7 +1623,7 @@ def process_homework(
             processing_warnings=list(dict.fromkeys(warnings))[:30],
             processing_progress=100,
             processing_message="作业内容与参考答案的结构化数据已生成",
-            extraction_schema_version=3,
+            extraction_schema_version=4,
         )
     except Exception as exc:
         logger.exception("Homework extraction failed for %s", homework_id)

@@ -197,6 +197,7 @@ export type HomeworkQuestion = {
   figures: HomeworkAsset[]
   answer?: string
   answer_subquestions?: HomeworkQuestionPart[]
+  answer_figures?: HomeworkAsset[]
   rubric?: string
 }
 

@@ -110,11 +110,13 @@ function ReflowedQuestion({ question }: { question: HomeworkQuestion }) {
 
 function ReflowedAnswer({ question }: { question: HomeworkQuestion }) {
   const content = structuredContent(question.answer || '', question.answer_subquestions)
+  const answerFigures = question.answer_figures || []
   return (
     <article className={`homework-paper-answer ${question.number.length > 2 ? 'has-long-number' : ''} ${question.points > 0 ? '' : 'is-unscored'}`}>
       <div className="homework-paper-number">{question.number}.</div>
       <div>
         <div className="homework-paper-answer-content">
+          <QuestionFigures figures={answerFigures} label={`第 ${question.number} 题参考答案`} />
           {content.stem
             ? <MathMarkdown content={content.stem} />
             : !content.parts.length && <MathMarkdown content="未识别到参考答案" />}
