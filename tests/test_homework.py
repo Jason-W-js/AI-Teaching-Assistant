@@ -1273,6 +1273,77 @@ def test_submission_is_graded_then_independently_reviewed(tmp_path):
         store.start_submission_grading(submission["id"])
 
 
+def test_failed_review_triggers_one_grading_correction_and_second_review(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    homework_id, question_id = extracted_homework(store)
+    store.publish(homework_id)
+    submission = store.create_submission(
+        homework_id=homework_id,
+        student_id="learner-test",
+        files=[("answer.png", "image/png", sample_image_bytes())],
+    )
+    store.start_submission_grading(submission["id"])
+    grader = FakeVisionClient(
+        {
+            "extracted_answer": "I = 0 mA",
+            "items": [{
+                "question_id": question_id,
+                "student_answer": "I = 0 mA",
+                "score": 0,
+                "is_correct": False,
+                "feedback": "结果错误",
+                "evidence": "未识别到计算过程",
+            }],
+            "summary": "初次批改",
+        },
+        {
+            "extracted_answer": "I = 2 mA",
+            "items": [{
+                "question_id": question_id,
+                "student_answer": "I = 2 mA",
+                "score": 10,
+                "is_correct": True,
+                "feedback": "纠正后答案正确",
+                "evidence": "重新识别原图后与标准答案一致",
+            }],
+            "summary": "已按审查意见纠正",
+        },
+    )
+    reviewer = FakeVisionClient(
+        {
+            "passed": False,
+            "confidence": 0.92,
+            "issues": ["原图中写的是 2 mA，前一模型错识为 0 mA"],
+            "recommendation": "重新识别原图",
+        },
+        {
+            "passed": True,
+            "confidence": 0.98,
+            "issues": [],
+            "recommendation": "纠正结果可以采用",
+        },
+    )
+
+    grade_submission(
+        store,
+        submission["id"],
+        grading_client=grader,
+        review_client=reviewer,
+    )
+
+    graded = store.get_raw_submission(submission["id"])
+    assert graded["status"] == "graded"
+    assert graded["grading"]["total_score"] == 10
+    assert graded["grading"]["items"][0]["student_answer"] == "I = 2 mA"
+    assert "自动纠正 1 个批次" in graded["grading"]["summary"]
+    assert len(grader.calls) == 2
+    assert len(reviewer.calls) == 2
+    assert "原图中写的是 2 mA" in grader.calls[1][0]
+    assert "唯一一次自动纠正机会" in grader.calls[1][0]
+    assert "I = 2 mA" in reviewer.calls[1][0]
+    assert all(call[2] == "image/jpeg" for call in grader.calls + reviewer.calls)
+
+
 def test_each_mapped_photo_question_is_graded_independently_even_with_reused_image(tmp_path):
     store = HomeworkStore(tmp_path / "homework")
     created = store.create_homework(
