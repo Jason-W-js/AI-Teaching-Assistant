@@ -2691,6 +2691,66 @@ def _repair_small_signal_input_units(items: list[dict[str, Any]]) -> None:
         )
 
 
+def _prune_cross_question_answer_leakage(
+    questions: list[dict[str, Any]],
+) -> list[str]:
+    """Remove exact, substantial answer fragments copied from later questions."""
+
+    def answer_fragments(question: dict[str, Any]) -> list[str]:
+        values = [_clean_text(question.get("answer"), 24000)]
+        values.extend(
+            _clean_text(part.get("text"), 12000)
+            for part in _normalize_labeled_parts(question.get("answer_subquestions", []))
+        )
+        return [
+            value
+            for value in values
+            if len(re.sub(r"\s+", "", value)) >= 50
+        ]
+
+    def remove_fragments(value: Any, fragments: Iterable[str]) -> tuple[str, bool]:
+        cleaned = str(value or "").strip()
+        removed = False
+        for fragment in sorted(set(fragments), key=len, reverse=True):
+            if cleaned.strip() == fragment.strip() or fragment not in cleaned:
+                continue
+            cleaned = cleaned.replace(fragment, "")
+            removed = True
+        if removed:
+            cleaned = re.sub(r"(?:解[：:]\s*){2,}", "解：\n", cleaned)
+            cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+        return cleaned, removed
+
+    warnings: list[str] = []
+    for index, question in enumerate(questions):
+        later_fragments = [
+            fragment
+            for later in questions[index + 1 :]
+            for fragment in answer_fragments(later)
+        ]
+        if not later_fragments:
+            continue
+        changed = False
+        answer, answer_changed = remove_fragments(
+            question.get("answer"), later_fragments
+        )
+        question["answer"] = answer
+        changed = changed or answer_changed
+        answer_subquestions = _normalize_labeled_parts(
+            question.get("answer_subquestions", [])
+        )
+        for part in answer_subquestions:
+            text, part_changed = remove_fragments(part.get("text"), later_fragments)
+            part["text"] = text
+            changed = changed or part_changed
+        question["answer_subquestions"] = answer_subquestions
+        if changed:
+            warnings.append(
+                f"第{_clean_text(question.get('number'), 80)}题答案中混入的后续题目解答已移除"
+            )
+    return warnings
+
+
 def _save_question_assets(
     *,
     assets_dir: Path,
@@ -3103,6 +3163,7 @@ def process_homework(
                 "answer_figures": answer_figures,
                 "source_segments": segments,
             })
+        warnings.extend(_prune_cross_question_answer_leakage(questions))
         max_score = round(sum(float(item.get("points", 0)) for item in questions), 2)
         updater(
             homework_id,

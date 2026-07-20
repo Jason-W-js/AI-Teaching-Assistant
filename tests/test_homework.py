@@ -19,6 +19,7 @@ from backend.app.services.homework import (
     _normalized_page_items,
     _page_prompt,
     _page_review_prompt,
+    _prune_cross_question_answer_leakage,
     _prune_redundant_question_figure_variants,
     _recover_missing_answer_continuations,
     _recover_missing_answer_figures,
@@ -900,6 +901,43 @@ def test_small_signal_input_unit_is_repaired_from_answer_consistency():
     _repair_small_signal_input_units([question, answer])
 
     assert "15\\sin\\omega t\\,\\mathrm{mV}" in question["question_text"]
+
+
+def test_cross_question_answer_fragments_are_removed_from_previous_question():
+    next_answer = (
+        "解：在 $T=300\\,\\mathrm{K}$ 时，计算本征载流子浓度，并由质量作用定律"
+        "求出少数载流子浓度。该段文字属于下一道题，长度足以作为可靠的去重证据。"
+    )
+    next_part = (
+        "温度升高后重新计算本征载流子浓度，再比较杂质浓度并判断半导体导电类型。"
+        "这同样是下一道题的独立答案，不应出现在前一道例题中。"
+    )
+    questions = [
+        {
+            "number": "例1.3.3",
+            "answer": f"解：\n{next_answer}\n解：",
+            "answer_subquestions": [
+                {
+                    "label": "1",
+                    "text": f"稳压管击穿，输出为稳定电压。\n{next_part}",
+                }
+            ],
+        },
+        {
+            "number": "1.1.1",
+            "answer": next_answer,
+            "answer_subquestions": [{"label": "1", "text": next_part}],
+        },
+    ]
+
+    warnings = _prune_cross_question_answer_leakage(questions)
+
+    assert questions[0]["answer"] == "解："
+    assert questions[0]["answer_subquestions"] == [
+        {"label": "1", "text": "稳压管击穿，输出为稳定电压。"}
+    ]
+    assert questions[1]["answer"] == next_answer
+    assert any("例1.3.3" in warning for warning in warnings)
 
 
 def test_missing_second_answer_part_is_recovered_from_next_page(tmp_path):
