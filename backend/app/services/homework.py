@@ -282,10 +282,11 @@ class HomeworkStore:
                 raise ValueError
             return {
                 "homeworks": value.get("homeworks", []) if isinstance(value.get("homeworks"), list) else [],
+                "question_banks": value.get("question_banks", []) if isinstance(value.get("question_banks"), list) else [],
                 "submissions": value.get("submissions", []) if isinstance(value.get("submissions"), list) else [],
             }
         except (OSError, ValueError, json.JSONDecodeError):
-            return {"homeworks": [], "submissions": []}
+            return {"homeworks": [], "question_banks": [], "submissions": []}
 
     def _write(self, value: dict[str, list[dict[str, Any]]]) -> None:
         temporary = self.index_path.with_suffix(".tmp")
@@ -299,11 +300,13 @@ class HomeworkStore:
         with self._lock:
             state = self._read()
             changed = False
-            for homework in state["homeworks"]:
-                if homework.get("status") == "processing":
-                    homework.update({
+            for collection, label in (("homeworks", "作业"), ("question_banks", "题库")):
+                for document in state[collection]:
+                    if document.get("status") != "processing":
+                        continue
+                    document.update({
                         "status": "error",
-                        "processing_error": "服务重启导致识别任务中断，请重新识别",
+                        "processing_error": f"服务重启导致{label}识别任务中断，请重新识别",
                         "processing_progress": 0,
                         "processing_message": "识别任务已中断",
                         "updated_at": _now(),
@@ -324,13 +327,23 @@ class HomeworkStore:
         return self.root / self.validate_homework_id(homework_id)
 
     @staticmethod
-    def _asset_url(homework_id: str, asset: dict[str, Any]) -> dict[str, Any]:
+    def _asset_url(
+        homework_id: str,
+        asset: dict[str, Any],
+        *,
+        asset_scope: str = "homeworks",
+    ) -> dict[str, Any]:
         value = dict(asset)
-        value["url"] = f"/api/homeworks/{homework_id}/assets/{asset['file']}"
+        value["url"] = f"/api/{asset_scope}/{homework_id}/assets/{asset['file']}"
         return value
 
     def _public_question(
-        self, homework_id: str, question: dict[str, Any], *, include_answers: bool
+        self,
+        homework_id: str,
+        question: dict[str, Any],
+        *,
+        include_answers: bool,
+        asset_scope: str = "homeworks",
     ) -> dict[str, Any]:
         result = {
             key: question.get(key)
@@ -347,12 +360,12 @@ class HomeworkStore:
         result["option_columns"] = _option_columns(result.get("option_columns"))
         result["figure_position"] = _figure_position(result.get("figure_position"))
         result["layout_images"] = [
-            self._asset_url(homework_id, item)
+            self._asset_url(homework_id, item, asset_scope=asset_scope)
             for item in question.get("layout_images", [])
             if isinstance(item, dict) and item.get("file")
         ]
         result["figures"] = [
-            self._asset_url(homework_id, item)
+            self._asset_url(homework_id, item, asset_scope=asset_scope)
             for item in question.get("figures", [])
             if isinstance(item, dict) and item.get("file")
         ]
@@ -369,7 +382,7 @@ class HomeworkStore:
                 question.get("answer_subquestions")
             )
             result["answer_figures"] = [
-                self._asset_url(homework_id, item)
+                self._asset_url(homework_id, item, asset_scope=asset_scope)
                 for item in question.get("answer_figures", [])
                 if isinstance(item, dict) and item.get("file")
             ]
@@ -415,13 +428,39 @@ class HomeworkStore:
             if isinstance(question, dict)
         ]
         if include_answers:
-            result["source_url"] = f"/api/homeworks/{homework_id}/source"
+            if homework.get("source_file"):
+                result["source_url"] = f"/api/homeworks/{homework_id}/source"
             result["submissions"] = [self._public_submission(item) for item in submissions]
             result["submission_count"] = len(submissions)
         else:
             own = [item for item in submissions if item.get("student_id") == student_id]
             latest = max(own, key=lambda item: str(item.get("created_at", "")), default=None)
             result["submission"] = self._public_submission(latest) if latest else None
+        return result
+
+    def _public_question_bank(self, bank: dict[str, Any]) -> dict[str, Any]:
+        bank_id = str(bank["id"])
+        result = {
+            key: bank.get(key)
+            for key in (
+                "id", "title", "status", "source_name", "created_at", "updated_at",
+                "extraction_model", "processing_error", "processing_warnings",
+                "processing_progress", "processing_message", "page_count", "max_score",
+            )
+        }
+        result["question_count"] = len(bank.get("questions", []))
+        result["questions"] = [
+            self._public_question(
+                bank_id,
+                question,
+                include_answers=True,
+                asset_scope="question-banks",
+            )
+            for question in bank.get("questions", [])
+            if isinstance(question, dict)
+        ]
+        if bank.get("source_file"):
+            result["source_url"] = f"/api/question-banks/{bank_id}/source"
         return result
 
     def create_homework(
@@ -466,6 +505,261 @@ class HomeworkStore:
             "page_count": 0,
             "max_score": 0,
             "questions": [],
+        }
+        with self._lock:
+            state = self._read()
+            state["homeworks"].append(item)
+            self._write(state)
+        return self.get_homework(homework_id, role="teacher")
+
+    def create_question_bank(
+        self,
+        *,
+        title: str,
+        filename: str,
+        content_type: str | None,
+        data: bytes,
+    ) -> dict[str, Any]:
+        safe_name = Path(filename).name or "question-bank.pdf"
+        suffix = Path(safe_name).suffix.lower()
+        if suffix not in HOMEWORK_SOURCE_SUFFIXES:
+            raise ValueError(f"不支持的题库附件类型：{suffix or '未知'}")
+        bank_id = uuid4().hex
+        bank_dir = self._homework_dir(bank_id)
+        bank_dir.mkdir(parents=True, exist_ok=False)
+        source_name = f"source{suffix}"
+        (bank_dir / source_name).write_bytes(data)
+        timestamp = _now()
+        item = {
+            "id": bank_id,
+            "title": _clean_text(title, 120) or Path(safe_name).stem,
+            "status": "processing",
+            "source_name": safe_name,
+            "source_file": source_name,
+            "source_content_type": content_type or mimetypes.guess_type(safe_name)[0] or "application/octet-stream",
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "extraction_model": settings.qwen_homework_extraction_model,
+            "processing_error": "",
+            "processing_warnings": [],
+            "processing_progress": 0,
+            "processing_message": "等待开始识别题库",
+            "page_count": 0,
+            "max_score": 0,
+            "questions": [],
+        }
+        with self._lock:
+            state = self._read()
+            state["question_banks"].append(item)
+            self._write(state)
+        return self.get_question_bank(bank_id)
+
+    def list_question_banks(self) -> list[dict[str, Any]]:
+        with self._lock:
+            items = self._read()["question_banks"]
+        result = [self._public_question_bank(item) for item in items]
+        return sorted(result, key=lambda item: str(item.get("created_at", "")), reverse=True)
+
+    def get_question_bank(self, bank_id: str) -> dict[str, Any]:
+        self.validate_homework_id(bank_id)
+        item = next(
+            (value for value in self.list_question_banks() if value.get("id") == bank_id),
+            None,
+        )
+        if item is None:
+            raise FileNotFoundError("题库不存在")
+        return item
+
+    def get_raw_question_bank(self, bank_id: str) -> dict[str, Any]:
+        self.validate_homework_id(bank_id)
+        with self._lock:
+            item = next(
+                (value for value in self._read()["question_banks"] if value.get("id") == bank_id),
+                None,
+            )
+        if item is None:
+            raise FileNotFoundError("题库不存在")
+        return json.loads(json.dumps(item, ensure_ascii=False))
+
+    def update_question_bank(self, bank_id: str, **updates: Any) -> None:
+        self.validate_homework_id(bank_id)
+        with self._lock:
+            state = self._read()
+            item = next(
+                (value for value in state["question_banks"] if value.get("id") == bank_id),
+                None,
+            )
+            if item is None:
+                raise FileNotFoundError("题库不存在")
+            item.update(updates)
+            item["updated_at"] = _now()
+            self._write(state)
+
+    def delete_question_bank(self, bank_id: str) -> bool:
+        bank_id = self.validate_homework_id(bank_id)
+        with self._lock:
+            state = self._read()
+            before = len(state["question_banks"])
+            state["question_banks"] = [
+                item for item in state["question_banks"] if item.get("id") != bank_id
+            ]
+            if len(state["question_banks"]) == before:
+                return False
+            self._write(state)
+        target = self._homework_dir(bank_id).resolve()
+        if target.parent == self.root and target.exists():
+            shutil.rmtree(target)
+        return True
+
+    def delete_question_bank_question(self, bank_id: str, question_id: str) -> bool:
+        bank_id = self.validate_homework_id(bank_id)
+        if not HOMEWORK_ID_PATTERN.fullmatch(question_id):
+            raise ValueError("题目标识不合法")
+        removed_assets: set[str] = set()
+        with self._lock:
+            state = self._read()
+            bank = next(
+                (value for value in state["question_banks"] if value.get("id") == bank_id),
+                None,
+            )
+            if bank is None:
+                raise FileNotFoundError("题库不存在")
+            question = next(
+                (value for value in bank.get("questions", []) if value.get("id") == question_id),
+                None,
+            )
+            if question is None:
+                return False
+            for field in ("layout_images", "figures", "answer_figures"):
+                removed_assets.update(
+                    str(asset["file"])
+                    for asset in question.get(field, [])
+                    if isinstance(asset, dict) and asset.get("file")
+                )
+            bank["questions"] = [
+                value for value in bank.get("questions", []) if value.get("id") != question_id
+            ]
+            bank["max_score"] = round(
+                sum(_as_float(value.get("points")) for value in bank["questions"]), 2
+            )
+            bank["updated_at"] = _now()
+            self._write(state)
+        assets_dir = (self._homework_dir(bank_id) / "assets").resolve()
+        for asset_name in removed_assets:
+            if not ASSET_NAME_PATTERN.fullmatch(asset_name):
+                continue
+            asset_path = (assets_dir / asset_name).resolve()
+            if asset_path.parent == assets_dir and asset_path.is_file():
+                asset_path.unlink()
+        return True
+
+    def create_homework_from_question_bank(
+        self,
+        *,
+        title: str,
+        instructions: str,
+        due_at: str,
+        selections: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        selected: list[tuple[dict[str, Any], dict[str, Any]]] = []
+        seen: set[tuple[str, str]] = set()
+        source_titles: list[str] = []
+        for selection in selections:
+            bank_id = self.validate_homework_id(str(selection.get("bank_id", "")))
+            bank = self.get_raw_question_bank(bank_id)
+            if bank.get("status") != "ready":
+                raise RuntimeError(f"题库“{bank.get('title', '')}”尚未识别完成")
+            source_titles.append(str(bank.get("title", "")))
+            questions = {
+                str(question.get("id")): question
+                for question in bank.get("questions", [])
+                if isinstance(question, dict)
+            }
+            question_ids = selection.get("question_ids", [])
+            if not isinstance(question_ids, list):
+                raise ValueError("题库选题格式不合法")
+            for question_id in question_ids:
+                key = (bank_id, str(question_id))
+                if key in seen:
+                    continue
+                question = questions.get(key[1])
+                if question is None:
+                    raise FileNotFoundError("所选题目已被删除，请刷新题库后重试")
+                seen.add(key)
+                selected.append((bank, question))
+        if not selected:
+            raise ValueError("请至少选择一道题")
+
+        homework_id = uuid4().hex
+        homework_dir = self._homework_dir(homework_id)
+        homework_dir.mkdir(parents=True, exist_ok=False)
+        assets_dir = homework_dir / "assets"
+        assets_dir.mkdir(parents=True, exist_ok=True)
+        questions: list[dict[str, Any]] = []
+        try:
+            for sequence, (bank, source_question) in enumerate(selected, 1):
+                bank_id = str(bank["id"])
+                question = json.loads(json.dumps(source_question, ensure_ascii=False))
+                original_id = str(question.get("id", ""))
+                question["id"] = hashlib.sha256(
+                    f"{homework_id}|{bank_id}|{original_id}".encode("utf-8")
+                ).hexdigest()[:32]
+                question["sequence"] = sequence
+                question["number"] = str(sequence)
+                question["origin_question_bank_id"] = bank_id
+                question["origin_question_id"] = original_id
+                question.pop("source_segments", None)
+                for field in ("layout_images", "figures", "answer_figures"):
+                    copied_assets: list[dict[str, Any]] = []
+                    for asset_index, asset in enumerate(question.get(field, []), 1):
+                        if not isinstance(asset, dict) or not asset.get("file"):
+                            continue
+                        source_name = Path(str(asset["file"])).name
+                        if not ASSET_NAME_PATTERN.fullmatch(source_name):
+                            raise ValueError("题库素材名称不合法")
+                        source_path = (self._homework_dir(bank_id) / "assets" / source_name).resolve()
+                        source_root = (self._homework_dir(bank_id) / "assets").resolve()
+                        if source_path.parent != source_root or not source_path.is_file():
+                            raise FileNotFoundError("题库题图不存在，请重新识别该题库")
+                        destination_name = (
+                            f"bank-{bank_id[:8]}-q{sequence:03d}-{field}-{asset_index:02d}"
+                            f"{source_path.suffix.lower()}"
+                        )
+                        shutil.copy2(source_path, assets_dir / destination_name)
+                        copied_assets.append({**asset, "file": destination_name})
+                    question[field] = copied_assets
+                questions.append(question)
+        except Exception:
+            if homework_dir.exists():
+                shutil.rmtree(homework_dir)
+            raise
+
+        timestamp = _now()
+        unique_titles = list(dict.fromkeys(title for title in source_titles if title))
+        item = {
+            "id": homework_id,
+            "title": _clean_text(title, 120) or f"题库精选作业（{len(questions)} 题）",
+            "instructions": _clean_text(instructions, 2000),
+            "due_at": _clean_text(due_at, 80),
+            "status": "draft",
+            "source_name": "、".join(unique_titles[:4]) or "题库选题",
+            "source_file": "",
+            "source_content_type": "",
+            "source_question_banks": [str(bank["id"]) for bank, _ in selected],
+            "created_at": timestamp,
+            "updated_at": timestamp,
+            "published_at": "",
+            "extraction_model": settings.qwen_homework_extraction_model,
+            "grading_model": settings.qwen_homework_grading_model,
+            "review_model": settings.qwen_homework_review_model,
+            "processing_error": "",
+            "processing_warnings": [],
+            "processing_progress": 100,
+            "processing_message": "已从题库生成结构化作业",
+            "page_count": 0,
+            "max_score": round(sum(_as_float(item.get("points")) for item in questions), 2),
+            "questions": questions,
+            "extraction_schema_version": 4,
         }
         with self._lock:
             state = self._read()
@@ -572,6 +866,8 @@ class HomeworkStore:
 
     def source_file(self, homework_id: str) -> tuple[dict[str, Any], Path]:
         raw = self.get_raw_homework(homework_id)
+        if not raw.get("source_file"):
+            raise FileNotFoundError("该作业由题库选题生成，没有单一原始附件")
         path = self._homework_dir(homework_id) / str(raw["source_file"])
         if not path.is_file():
             raise FileNotFoundError("作业原始附件不存在")
@@ -585,6 +881,24 @@ class HomeworkStore:
         path = (asset_root / asset_name).resolve()
         if path.parent != asset_root or not path.is_file():
             raise FileNotFoundError("作业素材不存在")
+        return path
+
+    def question_bank_source_file(self, bank_id: str) -> tuple[dict[str, Any], Path]:
+        raw = self.get_raw_question_bank(bank_id)
+        path = self._homework_dir(bank_id) / str(raw["source_file"])
+        if not path.is_file():
+            raise FileNotFoundError("题库原始附件不存在")
+        return raw, path
+
+    def question_bank_asset_file(self, bank_id: str, asset_name: str) -> Path:
+        self.get_raw_question_bank(bank_id)
+        bank_dir = self._homework_dir(bank_id).resolve()
+        asset_root = (bank_dir / "assets").resolve()
+        if not ASSET_NAME_PATTERN.fullmatch(asset_name):
+            raise ValueError("题库素材名称不合法")
+        path = (asset_root / asset_name).resolve()
+        if path.parent != asset_root or not path.is_file():
+            raise FileNotFoundError("题库素材不存在")
         return path
 
     def create_submission(
@@ -1392,14 +1706,25 @@ def process_homework(
     *,
     client: QwenVisionClient | Any | None = None,
     layout_adapter: PDFExtractKitAdapter | Any | None = None,
+    _record_kind: str = "homework",
 ) -> None:
     owned_client = False
     processing_dir: Path | None = None
+    if _record_kind not in {"homework", "question_bank"}:
+        raise ValueError("识别记录类型不合法")
+    is_question_bank = _record_kind == "question_bank"
+    source_reader = (
+        store.question_bank_source_file if is_question_bank else store.source_file
+    )
+    updater = store.update_question_bank if is_question_bank else store.update_homework
+    document_label = "题库" if is_question_bank else "作业"
     try:
-        raw, source_path = store.source_file(homework_id)
+        raw, source_path = source_reader(homework_id)
         if client is None:
             if not settings.qwen_api_key:
-                raise RuntimeError("未配置 QWEN_API_KEY，无法使用 qwen3-vl-plus 拆分作业")
+                raise RuntimeError(
+                    f"未配置 QWEN_API_KEY，无法使用 qwen3-vl-plus 拆分{document_label}"
+                )
             client = QwenVisionClient(
                 api_key=settings.qwen_api_key,
                 model=settings.qwen_homework_extraction_model,
@@ -1419,7 +1744,7 @@ def process_homework(
         if processing_dir.exists():
             shutil.rmtree(processing_dir)
         pages = _render_source(source_path, processing_dir)
-        store.update_homework(
+        updater(
             homework_id,
             page_count=len(pages),
             processing_progress=8,
@@ -1479,7 +1804,7 @@ def process_homework(
             raw_warnings = result.get("warnings", [])
             if isinstance(raw_warnings, list):
                 warnings.extend(_clean_text(item, 240) for item in raw_warnings if _clean_text(item, 240))
-            store.update_homework(
+            updater(
                 homework_id,
                 processing_progress=min(82, 8 + round(page_index / len(pages) * 74)),
                 processing_message=f"正在识别第 {page_index}/{len(pages)} 页",
@@ -1613,22 +1938,22 @@ def process_homework(
                 "source_segments": segments,
             })
         max_score = round(sum(float(item.get("points", 0)) for item in questions), 2)
-        store.update_homework(
+        updater(
             homework_id,
-            status="draft",
+            status="ready" if is_question_bank else "draft",
             questions=questions,
             page_count=len(pages),
             max_score=max_score,
             processing_error="",
             processing_warnings=list(dict.fromkeys(warnings))[:30],
             processing_progress=100,
-            processing_message="作业内容与参考答案的结构化数据已生成",
+            processing_message=f"{document_label}内容与参考答案的结构化数据已生成",
             extraction_schema_version=4,
         )
     except Exception as exc:
-        logger.exception("Homework extraction failed for %s", homework_id)
+        logger.exception("%s extraction failed for %s", document_label, homework_id)
         try:
-            store.update_homework(
+            updater(
                 homework_id,
                 status="error",
                 processing_error=_clean_text(exc, 1000),
@@ -1649,6 +1974,22 @@ def process_homework(
                 shutil.rmtree(resolved_processing)
         if owned_client and client is not None:
             client.close()
+
+
+def process_question_bank(
+    store: HomeworkStore,
+    bank_id: str,
+    *,
+    client: QwenVisionClient | Any | None = None,
+    layout_adapter: PDFExtractKitAdapter | Any | None = None,
+) -> None:
+    process_homework(
+        store,
+        bank_id,
+        client=client,
+        layout_adapter=layout_adapter,
+        _record_kind="question_bank",
+    )
 
 
 def _answer_contact_sheet(paths: Iterable[Path], output_path: Path) -> Path:

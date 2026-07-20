@@ -19,6 +19,7 @@ from backend.app.services.homework import (
     _split_labeled_text,
     grade_submission,
     process_homework,
+    process_question_bank,
 )
 
 
@@ -93,6 +94,52 @@ def extracted_homework(store: HomeworkStore) -> tuple[str, str]:
     return created["id"], raw["questions"][0]["id"]
 
 
+def extracted_question_bank(store: HomeworkStore) -> tuple[str, str]:
+    created = store.create_question_bank(
+        title="电子电路学习指导题库",
+        filename="学习指导书.png",
+        content_type="image/png",
+        data=sample_image_bytes(),
+    )
+    extraction = FakeVisionClient(
+        {
+            "items": [
+                {
+                    "question_key": "习题-1",
+                    "section_key": "习题",
+                    "section_title": "第一章 课后习题",
+                    "number": "1",
+                    "question_type": "choice",
+                    "question_text": "图1.3所示电路中的电流为多少？",
+                    "options": [
+                        {"label": "A", "text": "1 mA"},
+                        {"label": "B", "text": "2 mA"},
+                    ],
+                    "option_columns": 2,
+                    "figure_position": "after_question",
+                    "points": 2,
+                    "question_bboxes": [[50, 50, 950, 600]],
+                    "figure_bboxes": [[120, 320, 430, 520]],
+                    "figure_captions": ["图1.3"],
+                    "answer_bboxes": [[450, 150, 650, 250]],
+                    "answer_figure_bboxes": [],
+                    "answer_text": "B",
+                    "rubric": "选对得 2 分",
+                }
+            ],
+            "warnings": [],
+        }
+    )
+    process_question_bank(
+        store,
+        created["id"],
+        client=extraction,
+        layout_adapter=FakeLayoutAdapter(),
+    )
+    raw = store.get_raw_question_bank(created["id"])
+    return created["id"], raw["questions"][0]["id"]
+
+
 def test_extraction_reflows_text_and_keeps_only_independent_question_figures(tmp_path):
     store = HomeworkStore(tmp_path / "homework")
     homework_id, _ = extracted_homework(store)
@@ -148,6 +195,53 @@ def test_legacy_question_figures_infer_labels_from_question_text(tmp_path):
         "图1.3",
         "图4-2（a）",
     ]
+
+
+def test_question_bank_is_durable_and_selected_questions_become_independent_homework(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    bank_id, question_id = extracted_question_bank(store)
+
+    bank = store.get_question_bank(bank_id)
+    assert bank["status"] == "ready"
+    assert bank["question_count"] == 1
+    assert bank["questions"][0]["answer"] == "B"
+    assert bank["questions"][0]["figures"][0]["url"].startswith(
+        f"/api/question-banks/{bank_id}/assets/"
+    )
+
+    homework = store.create_homework_from_question_bank(
+        title="第一章精选练习",
+        instructions="完成后拍照提交",
+        due_at="2026-07-30T18:00",
+        selections=[{"bank_id": bank_id, "question_ids": [question_id]}],
+    )
+    assert homework["status"] == "draft"
+    assert homework["question_count"] == 1
+    assert homework["questions"][0]["number"] == "1"
+    assert homework["questions"][0]["answer"] == "B"
+    assert "source_url" not in homework
+    copied_figure = homework["questions"][0]["figures"][0]
+    assert copied_figure["url"].startswith(f"/api/homeworks/{homework['id']}/assets/")
+    assert store.asset_file(homework["id"], copied_figure["file"]).is_file()
+
+    assert store.delete_question_bank(bank_id) is True
+    assert store.asset_file(homework["id"], copied_figure["file"]).is_file()
+    store.publish(homework["id"])
+    student = store.get_homework(homework["id"], role="student", student_id="learner-test")
+    assert "answer" not in student["questions"][0]
+
+
+def test_question_bank_questions_can_be_deleted_individually(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    bank_id, question_id = extracted_question_bank(store)
+    question = store.get_raw_question_bank(bank_id)["questions"][0]
+    figure_file = question["figures"][0]["file"]
+
+    assert store.delete_question_bank_question(bank_id, question_id) is True
+    assert store.get_question_bank(bank_id)["question_count"] == 0
+    with pytest.raises(FileNotFoundError):
+        store.question_bank_asset_file(bank_id, figure_file)
+    assert store.delete_question_bank_question(bank_id, question_id) is False
 
 
 def test_cross_page_figures_are_reassigned_by_nearby_native_captions():

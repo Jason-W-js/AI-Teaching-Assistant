@@ -23,6 +23,7 @@ from backend.app.rag.manager import KnowledgeBaseManager
 from backend.app.rag.multimodal import BuildModelConfig
 from backend.app.schemas import (
     ChatRequest,
+    HomeworkFromQuestionBankRequest,
     KnowledgeBaseRebuildRequest,
     LearningPlanPptRequest,
     MistakeCreateRequest,
@@ -45,6 +46,7 @@ from backend.app.services.homework import (
     HomeworkStore,
     grade_submission,
     process_homework,
+    process_question_bank,
 )
 from backend.app.services.model_catalog import (
     QWEN_MODELS,
@@ -896,6 +898,164 @@ async def create_homework(
         "homework": homework,
         "message": "附件已上传，qwen3-vl-plus 与 PDF-Extract-Kit 正在拆分题目",
     }
+
+
+@app.post("/api/homeworks/from-question-bank")
+async def create_homework_from_question_bank(
+    request: HomeworkFromQuestionBankRequest,
+) -> dict[str, Any]:
+    try:
+        homework = await asyncio.to_thread(
+            homework_store.create_homework_from_question_bank,
+            title=request.title,
+            instructions=request.instructions,
+            due_at=request.due_at,
+            selections=[selection.model_dump() for selection in request.selections],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "homework": homework,
+        "message": f"已从题库选择 {homework['question_count']} 道题生成作业",
+    }
+
+
+@app.get("/api/question-banks")
+async def list_question_banks() -> dict[str, Any]:
+    return {"question_banks": homework_store.list_question_banks()}
+
+
+@app.post("/api/question-banks")
+async def create_question_bank(
+    background_tasks: BackgroundTasks,
+    file: UploadFile = File(...),
+    title: str = Form(""),
+) -> dict[str, Any]:
+    original_name = Path(file.filename or "question-bank.pdf").name
+    content_type = file.content_type
+    suffix = Path(original_name).suffix.lower()
+    if suffix not in HOMEWORK_SOURCE_SUFFIXES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"不支持的题库附件类型：{suffix or '未知'}",
+        )
+    try:
+        content = await _read_bounded_upload(
+            file,
+            settings.max_homework_upload_mb * 1024 * 1024,
+            "题库附件",
+        )
+    finally:
+        await file.close()
+    try:
+        bank = await asyncio.to_thread(
+            homework_store.create_question_bank,
+            title=title,
+            filename=original_name,
+            content_type=content_type,
+            data=content,
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    background_tasks.add_task(process_question_bank, homework_store, str(bank["id"]))
+    return {
+        "ok": True,
+        "question_bank": bank,
+        "message": "题库附件已长期保存，正在提取题目、题图与参考答案",
+    }
+
+
+@app.get("/api/question-banks/{bank_id}")
+async def get_question_bank(bank_id: str) -> dict[str, Any]:
+    try:
+        bank = homework_store.get_question_bank(bank_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"question_bank": bank}
+
+
+@app.post("/api/question-banks/{bank_id}/reprocess")
+async def reprocess_question_bank(
+    bank_id: str,
+    background_tasks: BackgroundTasks,
+) -> dict[str, Any]:
+    try:
+        bank = homework_store.get_raw_question_bank(bank_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if bank.get("status") == "processing":
+        raise HTTPException(status_code=409, detail="题库正在识别中")
+    await asyncio.to_thread(
+        homework_store.update_question_bank,
+        bank_id,
+        status="processing",
+        processing_error="",
+        processing_warnings=[],
+        processing_progress=0,
+        processing_message="等待重新识别题库",
+    )
+    background_tasks.add_task(process_question_bank, homework_store, bank_id)
+    return {"ok": True, "message": "已重新开始识别题库"}
+
+
+@app.delete("/api/question-banks/{bank_id}/questions/{question_id}")
+async def delete_question_bank_question(bank_id: str, question_id: str) -> dict[str, Any]:
+    try:
+        deleted = await asyncio.to_thread(
+            homework_store.delete_question_bank_question,
+            bank_id,
+            question_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="题目不存在或已被删除")
+    return {"ok": True}
+
+
+@app.delete("/api/question-banks/{bank_id}")
+async def delete_question_bank(bank_id: str) -> dict[str, Any]:
+    try:
+        deleted = await asyncio.to_thread(homework_store.delete_question_bank, bank_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="题库不存在")
+    return {"ok": True}
+
+
+@app.get("/api/question-banks/{bank_id}/source")
+async def get_question_bank_source(bank_id: str) -> FileResponse:
+    try:
+        bank, path = homework_store.question_bank_source_file(bank_id)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(
+        path,
+        media_type=str(bank.get("source_content_type", "application/octet-stream")),
+        filename=str(bank.get("source_name", path.name)),
+        content_disposition_type="inline",
+    )
+
+
+@app.get("/api/question-banks/{bank_id}/assets/{asset_name}")
+async def get_question_bank_asset(bank_id: str, asset_name: str) -> FileResponse:
+    try:
+        path = homework_store.question_bank_asset_file(bank_id, asset_name)
+    except (ValueError, FileNotFoundError) as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return FileResponse(path, media_type=mimetypes.guess_type(path.name)[0] or "image/png")
 
 
 @app.get("/api/homeworks/{homework_id}")

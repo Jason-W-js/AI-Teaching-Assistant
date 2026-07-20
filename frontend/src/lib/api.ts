@@ -157,6 +157,7 @@ export type ScheduleItem = {
 export type ScheduleItemDraft = Pick<ScheduleItem, 'title' | 'date' | 'time' | 'category' | 'note'>
 
 export type HomeworkStatus = 'processing' | 'draft' | 'published' | 'error'
+export type QuestionBankStatus = 'processing' | 'ready' | 'error'
 export type HomeworkSubmissionStatus = 'grading' | 'graded' | 'review_required' | 'error'
 
 export type HomeworkAsset = {
@@ -267,6 +268,25 @@ export type Homework = {
   submissions?: HomeworkSubmission[]
   submission_count?: number
   submission?: HomeworkSubmission | null
+}
+
+export type QuestionBank = {
+  id: string
+  title: string
+  status: QuestionBankStatus
+  source_name: string
+  source_url?: string
+  created_at: string
+  updated_at: string
+  extraction_model: string
+  processing_error: string
+  processing_warnings: string[]
+  processing_progress: number
+  processing_message: string
+  page_count: number
+  max_score: number
+  question_count: number
+  questions: HomeworkQuestion[]
 }
 
 export type GeneratedPresentation = {
@@ -554,6 +574,63 @@ export async function createHomework(
   const response = await fetch('/api/homeworks', { method: 'POST', body: data })
   const result = await homeworkResponse<{ homework: Homework }>(response, '作业上传失败')
   return result.homework
+}
+
+export async function createHomeworkFromQuestionBank(fields: {
+  title: string
+  instructions: string
+  dueAt: string
+  selections: Array<{ bank_id: string; question_ids: string[] }>
+}): Promise<Homework> {
+  const response = await fetch('/api/homeworks/from-question-bank', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: fields.title,
+      instructions: fields.instructions,
+      due_at: fields.dueAt,
+      selections: fields.selections,
+    }),
+  })
+  const result = await homeworkResponse<{ homework: Homework }>(response, '题库作业创建失败')
+  return result.homework
+}
+
+export async function fetchQuestionBanks(): Promise<QuestionBank[]> {
+  const response = await fetch('/api/question-banks')
+  const result = await homeworkResponse<{ question_banks: QuestionBank[] }>(response, '题库读取失败')
+  return result.question_banks || []
+}
+
+export async function createQuestionBank(file: File, title: string): Promise<QuestionBank> {
+  const data = new FormData()
+  data.append('file', file)
+  data.append('title', title)
+  const response = await fetch('/api/question-banks', { method: 'POST', body: data })
+  const result = await homeworkResponse<{ question_bank: QuestionBank }>(response, '题库上传失败')
+  return result.question_bank
+}
+
+export async function reprocessQuestionBank(bankId: string): Promise<void> {
+  const response = await fetch(`/api/question-banks/${encodeURIComponent(bankId)}/reprocess`, {
+    method: 'POST',
+  })
+  await homeworkResponse(response, '重新识别题库失败')
+}
+
+export async function deleteQuestionBank(bankId: string): Promise<void> {
+  const response = await fetch(`/api/question-banks/${encodeURIComponent(bankId)}`, {
+    method: 'DELETE',
+  })
+  await homeworkResponse(response, '题库删除失败')
+}
+
+export async function deleteQuestionBankQuestion(bankId: string, questionId: string): Promise<void> {
+  const response = await fetch(
+    `/api/question-banks/${encodeURIComponent(bankId)}/questions/${encodeURIComponent(questionId)}`,
+    { method: 'DELETE' },
+  )
+  await homeworkResponse(response, '题目删除失败')
 }
 
 export async function publishHomework(homeworkId: string): Promise<Homework> {

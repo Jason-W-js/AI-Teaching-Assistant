@@ -202,6 +202,38 @@ class LearningPlanPptRequest(BaseModel):
         return value.strip()
 
 
+class QuestionBankSelection(BaseModel):
+    bank_id: str = Field(min_length=32, max_length=32)
+    question_ids: list[str] = Field(min_length=1, max_length=500)
+
+    @field_validator("bank_id")
+    @classmethod
+    def valid_bank_id(cls, value: str) -> str:
+        if not re.fullmatch(r"[a-f0-9]{32}", value):
+            raise ValueError("题库标识不合法")
+        return value
+
+    @field_validator("question_ids")
+    @classmethod
+    def valid_question_ids(cls, values: list[str]) -> list[str]:
+        for value in values:
+            if not re.fullmatch(r"[a-f0-9]{32}", value):
+                raise ValueError("题目标识不合法")
+        return list(dict.fromkeys(values))
+
+
+class HomeworkFromQuestionBankRequest(BaseModel):
+    title: str = Field(default="", max_length=120)
+    instructions: str = Field(default="", max_length=2000)
+    due_at: str = Field(default="", max_length=80)
+    selections: list[QuestionBankSelection] = Field(min_length=1, max_length=100)
+
+    @field_validator("title", "instructions", "due_at")
+    @classmethod
+    def strip_homework_bank_fields(cls, value: str) -> str:
+        return value.strip()
+
+
 class KBStatus(BaseModel):
     id: str
     state: Literal["ready", "building", "error", "missing"]
