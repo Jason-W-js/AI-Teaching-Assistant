@@ -5,6 +5,7 @@ import io
 import json
 import logging
 import mimetypes
+import os
 import re
 import shutil
 import threading
@@ -34,6 +35,57 @@ STUDENT_ID_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,96}")
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _process_is_running(value: Any) -> bool:
+    try:
+        process_id = int(value)
+    except (TypeError, ValueError):
+        return False
+    if process_id <= 0:
+        return False
+    if process_id == os.getpid():
+        return True
+    if os.name == "nt":
+        try:
+            import ctypes
+
+            process_query_limited_information = 0x1000
+            still_active = 259
+            kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+            kernel32.OpenProcess.argtypes = [
+                ctypes.c_ulong,
+                ctypes.c_int,
+                ctypes.c_ulong,
+            ]
+            kernel32.OpenProcess.restype = ctypes.c_void_p
+            kernel32.GetExitCodeProcess.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_ulong),
+            ]
+            kernel32.GetExitCodeProcess.restype = ctypes.c_int
+            kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+            kernel32.CloseHandle.restype = ctypes.c_int
+            handle = kernel32.OpenProcess(
+                process_query_limited_information, False, process_id
+            )
+            if not handle:
+                return False
+            try:
+                exit_code = ctypes.c_ulong()
+                return bool(
+                    kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code))
+                    and exit_code.value == still_active
+                )
+            finally:
+                kernel32.CloseHandle(handle)
+        except (AttributeError, OSError, ValueError):
+            return False
+    try:
+        os.kill(process_id, 0)
+    except (OSError, PermissionError, ProcessLookupError):
+        return False
+    return True
 
 
 def _clean_text(value: Any, limit: int = 24000) -> str:
@@ -304,11 +356,14 @@ class HomeworkStore:
                 for document in state[collection]:
                     if document.get("status") != "processing":
                         continue
+                    if _process_is_running(document.get("processing_owner_pid")):
+                        continue
                     document.update({
                         "status": "error",
                         "processing_error": f"服务重启导致{label}识别任务中断，请重新识别",
                         "processing_progress": 0,
                         "processing_message": "识别任务已中断",
+                        "processing_owner_pid": None,
                         "updated_at": _now(),
                     })
                     changed = True
@@ -1149,6 +1204,9 @@ def _page_prompt(
 11. question_bboxes 只框题干与小问；figure_bboxes 只能框学生作答前就应看到的已知电路图、波形图或表格，不要把图号文字裁进图中。figure_captions 与 figure_bboxes 按顺序一一对应，只填写原文图号/图注，例如“图1.3”；即使图号只出现在上一页题干的“如图1.3所示”中，也必须为该题返回一个 question_text 为空的续接片段，并把图归给原 question_key。
 12. answer_bboxes 必须框出本页所有会泄露答案的文字区域；answer_figure_bboxes 单独框出“解：/答案”中才出现的结果图、设计图、推导图和参考电路图，并用 answer_figure_captions 对齐图号。题目要求学生“画出/绘制/设计电路图”且原题没有提供“图x.x/如图/下图”时，答案页画出的电路绝不能进入 figure_bboxes。rubric 只保留明确的评分点。
 13. 图必须归到实际引用它的题目，不能成为独立题目；同一页相邻的“图1.1”“图1.2”必须根据各题题干引用分别归属，不能全部放进当前题。页眉装饰图不要返回。
+14. 题号和单位必须逐字符忠实抄录：例如“例 1.3.1”不能写成“1.3.1”，“1.1.1”不能缩成“1.1”，$15\\,\\mathrm{{mV}}$ 不能写成 $15\\,\\mathrm{{V}}$。看不清时保留页面原样，不得依据答案数值猜测或换算单位。
+15. 页面开头若先出现上一题的答案续文或题图、随后才出现新题，必须返回两个独立 item：续文沿用上一题 question_key 且 question_text 为空；新题使用页面印刷的新题号和新 key。不得把上一题的答案小问并入新题。
+16. “图 x.x 题 y.y.y 的图”属于题 y.y.y 的学生题图；“图 x.x 题 y.y.y 的解”属于该题答案图。同一题的“题图”和“解图”必须分别放入 figure_bboxes 与 answer_figure_bboxes。
 
 最近已出现的题目（用于判断跨页续接，不得覆盖页面上的新题号）：{json.dumps(previous_items[-12:], ensure_ascii=False)}
 PDF 原生文本（可能为空或错序）：
@@ -1159,6 +1217,41 @@ PDF-Extract-Kit 检测区域：
 
 仅返回 JSON：
 {{"items":[{{"question_key":"1.4-1.2.1","section_key":"1.4","section_title":"1.4 习题解答","number":"1.2.1","question_type":"choice|calculation|short_answer|design|other","question_text":"所有小问共享的题干","subquestions":[{{"label":"1","text":"第一个小问"}},{{"label":"2","text":"第二个小问"}}],"options":[{{"label":"A","text":"选项内容"}}],"option_columns":2,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"figure_captions":["图1.3"],"answer_bboxes":[[0,0,1000,1000]],"answer_figure_bboxes":[[0,0,1000,1000]],"answer_figure_captions":[""],"answer_text":"所有小问共享的答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}},{{"label":"2","text":"第二问答案"}}],"rubric":"明确评分点"}}],"warnings":[]}}。"""
+
+
+def _page_review_prompt(
+    page: dict[str, Any],
+    regions: list[dict[str, Any]],
+    previous_items: list[dict[str, Any]],
+    extracted_items: list[dict[str, Any]],
+) -> str:
+    """Ask a second vision pass to correct page-boundary and transcription errors."""
+    return f"""你是高校电路题库的逐页复核员。请重新查看附件第 {page['page']} 页，并审查第一次提取结果。
+
+本次不是摘要任务，而是逐字符、逐区域纠错。必须遵守：
+1. 完整保留印刷题号，包括“例”字和全部点分层级；“例1.3.1”不能变成“1.3.1”，“1.1.1”不能变成“1.1”。
+2. 逐字符核对变量、上下标、希腊字母和单位；特别检查 V、mV、A、mA、Ω、kΩ，禁止根据常识改写单位。
+3. 页面开头若是上一题答案/题图的续页，要另建一个沿用上一题 question_key 的 item，question_text 为空；随后出现的新题必须另建 item，不能把两个题的内容合并。
+4. 所有实际印刷的小问都要保留。题干小问只进 subquestions，解答小问只进 answer_subquestions；上一题答案不得进入下一题答案。
+5. 题目引用的已知图进入 figure_bboxes；“解：”之后才出现的结果图、等效图、波形答案进入 answer_figure_bboxes。图号文字不裁入图，caption 忠实填写完整图号。
+6. “图x.x 题y.y.y的图”归题 y.y.y 的题面；“图x.x 题y.y.y的解”归题 y.y.y 的答案。若只需图(a)而图(b)是解答，只把图(a)放入题面。
+7. 忽略知识讲解、页眉页脚、章节过渡和普通公式说明。不得从最近题目复制页面上不存在的文字。
+
+最近题目（仅用于识别跨页归属）：
+{json.dumps(previous_items[-12:], ensure_ascii=False)}
+
+第一次提取结果（必须逐项核对，可补充漏掉的跨页续接 item）：
+{json.dumps(extracted_items, ensure_ascii=False)}
+
+PDF 原生文本（可能为空或错序）：
+{page['text'][:12000]}
+
+PDF-Extract-Kit 检测区域：
+{json.dumps(regions, ensure_ascii=False)}
+
+所有 bbox 使用当前整页图片的归一化坐标 [left,top,right,bottom]，范围 0-1000。
+仅返回与第一次相同结构的 JSON：
+{{"items":[{{"question_key":"例题-1.3.1","section_key":"1.3","section_title":"1.3 例题解析","number":"例1.3.1","question_type":"calculation","question_text":"共享题干","subquestions":[{{"label":"1","text":"第一问"}}],"options":[],"option_columns":1,"figure_position":"after_question","points":0,"question_bboxes":[[0,0,1000,1000]],"figure_bboxes":[[0,0,1000,1000]],"figure_captions":["图1.3.1（a）"],"answer_bboxes":[[0,0,1000,1000]],"answer_figure_bboxes":[],"answer_figure_captions":[],"answer_text":"答案说明","answer_subquestions":[{{"label":"1","text":"第一问答案"}}],"rubric":""}}],"warnings":[]}}。"""
 
 
 def _normalized_page_items(value: dict[str, Any], page_number: int) -> list[dict[str, Any]]:
@@ -1333,15 +1426,16 @@ def _consolidate_question_keys(
     has_point_evidence = any(_as_float(item.get("points")) > 0 for item in items)
     prompt = """你是整份作业附件的题号归并审查员。附件可能是试卷、习题册或学习指导书。下面是逐页提取的题目片段，逐页模型可能错误复用旧 question_key。
 请为每个 segment_index 指定 canonical_key，保证：
-1. 同一大题、章节或习题组内，页面印刷的新完整题号必须形成新 key，key 后缀必须等于 printed_number；点分题号（如 1.2.3）和例题号必须完整保留。
+1. 同一大题、章节或习题组内，页面印刷的新完整题号必须形成新 key，并在 corrected_number 中逐字符返回正确题号；点分题号（如 1.1.1、1.2.3）不能截短，例题的 corrected_number 必须保留“例”字。
 2. 只有明显属于上一页同一题的答案、解题过程或续接小问才沿用上一题 key；续接片段的 printed_number 可能被 OCR 误读，此时依据页面顺序和 text_start 判断。
 3. 单纯换页不能切换章节前缀；连续题号序列（例如 1、2、3、4……20）必须使用同一前缀，即使 raw_key 的前缀被逐页模型误写。只有题号重新从 1 开始或出现明确的新大题标题时才切换中文章节前缀，例如“一-20”之后的计算题为“二-1”，下一部分重新从 1 开始时为“三-1”。
 4. 根据页面计分说明校正 points：例如同一连续选择题部分写明“每空2分，共40分”，则该部分第1至20题都应为2分。只有 current_points 中已存在正分值或页面文字有明确分值证据时才能修改；普通习题册没有分值时 points 必须为0，禁止臆造每题2分。跨页续接片段沿用该题分值。
 5. 对每个片段返回 keep。只有明确的独立题目、与题目对应的答案或跨页续接内容 keep=true；目录、教学要求、基本知识点、普通讲解、过渡文字等非题目内容 keep=false。
-6. 不改题目内容；必须覆盖每个 segment_index。
+6. corrected_section_title 必须使用页面真实章节标题。同一个 section_key 的连续题目应保持统一标题，例如均属于“1.4 习题解答”，不能在中途变成“1.3 习题”。
+7. 不改题目内容；必须覆盖每个 segment_index。
 页面开头原生文本（用于识别大题标题与计分说明）：
 """ + json.dumps(page_contexts or [], ensure_ascii=False) + """
-仅返回 JSON：{"assignments":[{"segment_index":0,"canonical_key":"一-1","points":2,"keep":true,"reason":"页面明确出现新题1"}]}。
+仅返回 JSON：{"assignments":[{"segment_index":0,"canonical_key":"1.4-1.1.1","corrected_number":"1.1.1","corrected_section_title":"1.4 习题解答","points":0,"keep":true,"reason":"页面明确印刷1.1.1"}]}。
 题目片段：
 """ + json.dumps(compact, ensure_ascii=False)
     try:
@@ -1351,7 +1445,7 @@ def _consolidate_question_keys(
             item["question_key"] = _repair_numbered_key(item)
         return items, [f"全卷题号归并失败，已使用规则校正：{_clean_text(exc, 240)}"]
     raw_assignments = result.get("assignments", [])
-    assignments: dict[int, tuple[str, float | None, bool]] = {}
+    assignments: dict[int, tuple[str, float | None, bool, str, str]] = {}
     if isinstance(raw_assignments, list):
         for assignment in raw_assignments:
             if not isinstance(assignment, dict):
@@ -1368,12 +1462,18 @@ def _consolidate_question_keys(
                 except (TypeError, ValueError):
                     points = None
                 keep = _as_bool(assignment.get("keep", True))
+                corrected_number = _clean_text(assignment.get("corrected_number"), 80)
+                corrected_section_title = _clean_text(
+                    assignment.get("corrected_section_title"), 240
+                )
                 assignments[index] = (
                     key,
                     points
                     if has_point_evidence and points is not None and points > 0
                     else None,
                     keep,
+                    corrected_number,
+                    corrected_section_title,
                 )
     warnings: list[str] = []
     if len(assignments) < len(items):
@@ -1383,16 +1483,159 @@ def _consolidate_question_keys(
     kept_items: list[dict[str, Any]] = []
     for index, item in enumerate(items):
         if index in assignments:
-            key, points, keep = assignments[index]
+            key, points, keep, corrected_number, corrected_section_title = assignments[index]
             if not keep:
                 continue
             item["question_key"] = key
+            if corrected_number:
+                item["number"] = corrected_number
+            if corrected_section_title:
+                item["section_title"] = corrected_section_title
             if points is not None:
                 item["points"] = round(points, 2)
         else:
             item["question_key"] = _repair_numbered_key(item)
         kept_items.append(item)
     return kept_items, warnings
+
+
+def _canonical_key_number(question_key: Any) -> str:
+    key = _clean_text(question_key, 80)
+    if "-" not in key:
+        return ""
+    suffix = key.rsplit("-", 1)[-1]
+    return suffix if re.fullmatch(r"(?:例\s*)?\d+(?:\.\d+)+", suffix) else ""
+
+
+def _normalize_document_metadata(items: list[dict[str, Any]]) -> None:
+    """Keep section headings consistent and preserve full printed example numbers."""
+    def dotted_rank(value: str) -> tuple[int, ...] | None:
+        if not re.fullmatch(r"\d+(?:\.\d+)+", value):
+            return None
+        return tuple(int(part) for part in value.split("."))
+
+    active_section_key = ""
+    active_section_title = ""
+    active_rank: tuple[int, ...] | None = None
+    previous_question_item: dict[str, Any] | None = None
+    for item in items:
+        section_key = _clean_text(item.get("section_key"), 40)
+        title = _clean_text(item.get("section_title"), 240)
+        rank = dotted_rank(section_key)
+        if rank is not None:
+            if active_rank is None or rank >= active_rank:
+                if active_rank is None or rank > active_rank:
+                    active_section_key = section_key
+                    active_section_title = title
+                    active_rank = rank
+                elif not active_section_title and title:
+                    active_section_title = title
+            elif active_rank is not None:
+                section_key = active_section_key
+                title = active_section_title
+        elif section_key and section_key != active_section_key:
+            active_section_key = section_key
+            active_section_title = title
+            active_rank = None
+
+        if active_section_key:
+            item["section_key"] = active_section_key
+        if active_section_title:
+            item["section_title"] = active_section_title
+
+        number = _clean_text(item.get("number"), 80)
+        key_number = _canonical_key_number(item.get("question_key"))
+        if key_number:
+            plain_key_number = re.sub(r"^例\s*", "", key_number)
+            plain_number = re.sub(r"^例\s*", "", number)
+            if (
+                not number
+                or plain_key_number.startswith(f"{plain_number}.")
+                or len(plain_key_number.split(".")) > len(plain_number.split("."))
+            ):
+                number = key_number
+
+        normalized_title = _clean_text(item.get("section_title"), 240)
+        if "例题" in normalized_title:
+            if re.fullmatch(r"\d+(?:\.\d+)+", number):
+                number = f"例{number}"
+        elif re.search(r"习题|练习|作业|题解", normalized_title):
+            question_evidence = bool(
+                _clean_text(item.get("question_text"))
+                or item.get("subquestions")
+                or item.get("options")
+                or item.get("question_bboxes")
+            )
+            answer_evidence = bool(
+                _clean_text(item.get("answer_text"))
+                or item.get("answer_subquestions")
+                or item.get("answer_bboxes")
+            )
+            if (
+                number.startswith("例")
+                and answer_evidence
+                and not question_evidence
+                and previous_question_item is not None
+            ):
+                # A page can start with the previous exercise's answer and end
+                # with the next exercise's figure.  Vision occasionally labels
+                # that mixed segment as an example bearing the next number.
+                # Keep its answer on the preceding real question; figure repair
+                # will independently move the following figure by caption.
+                number = _clean_text(previous_question_item.get("number"), 80)
+                item["question_key"] = previous_question_item.get(
+                    "question_key", item.get("question_key", "")
+                )
+            else:
+                number = re.sub(r"^例\s*", "", number)
+        item["number"] = number or key_number or _clean_text(item.get("question_key"), 80)
+        if bool(
+            _clean_text(item.get("question_text"))
+            or item.get("subquestions")
+            or item.get("options")
+            or item.get("question_bboxes")
+        ):
+            previous_question_item = item
+
+    # Guidance books sometimes OCR 1.1.1/1.1.2 as 1.1/1.2 immediately
+    # before the next 1.2.1 group. Repair that unambiguous depth transition.
+    index = 0
+    while index < len(items):
+        match = re.fullmatch(r"(\d+)\.(\d+)", _clean_text(items[index].get("number"), 80))
+        if not match or match.group(2) != "1":
+            index += 1
+            continue
+        major = match.group(1)
+        run_end = index
+        expected = 1
+        while run_end < len(items):
+            current = re.fullmatch(
+                rf"{re.escape(major)}\.(\d+)",
+                _clean_text(items[run_end].get("number"), 80),
+            )
+            if not current or int(current.group(1)) != expected:
+                break
+            expected += 1
+            run_end += 1
+        next_number = (
+            _clean_text(items[run_end].get("number"), 80)
+            if run_end < len(items)
+            else ""
+        )
+        if run_end - index >= 2 and next_number == f"{major}.2.1":
+            for offset, item in enumerate(items[index:run_end], 1):
+                item["number"] = f"{major}.1.{offset}"
+        index = max(run_end, index + 1)
+
+    # Canonical keys must distinguish an example from an exercise with the same
+    # printed number and must not rely on a model-generated cross-document key.
+    for item in items:
+        number = _clean_text(item.get("number"), 80)
+        plain_number = re.sub(r"^例\s*", "", number)
+        section_key = _clean_text(item.get("section_key"), 40)
+        if section_key and re.fullmatch(r"\d+(?:\.\d+)+", plain_number):
+            marker = "例" if number.startswith("例") else "题"
+            item["question_key"] = f"{section_key}-{marker}{plain_number}"
 
 
 def _pixel_bbox(bbox: list[float], width: int, height: int) -> tuple[int, int, int, int]:
@@ -1445,40 +1688,141 @@ def _nearby_native_figure_caption(
     return min(candidates, default=(0.0, ""), key=lambda item: item[0])[1]
 
 
+def _figure_caption_base(value: Any) -> str:
+    captions = _infer_figure_captions(value)
+    if not captions:
+        return ""
+    return re.sub(r"（[^）]+）$", "", captions[0])
+
+
+def _figure_subpart(value: Any) -> str:
+    text = _clean_text(value, 160).replace("(", "（").replace(")", "）")
+    match = re.search(r"（\s*([A-Za-z0-9]+)\s*）", text)
+    return match.group(1).lower() if match else ""
+
+
+def _caption_with_subpart(base: str, subpart: str) -> str:
+    return f"{base}（{subpart}）" if base and subpart else base
+
+
+def _figure_continuation(
+    target: dict[str, Any],
+    *,
+    page_number: int,
+    bbox: list[float],
+    caption: str,
+    kind: str,
+) -> dict[str, Any]:
+    is_question_figure = kind == "question"
+    return {
+        "question_key": target["question_key"],
+        "section_key": target.get("section_key", ""),
+        "section_title": target.get("section_title", ""),
+        "number": target.get("number", target["question_key"]),
+        "question_type": target.get("question_type", "other"),
+        "question_text": "",
+        "subquestions": [],
+        "options": [],
+        "option_columns": 1,
+        "figure_position": (
+            "after_question"
+            if page_number >= int(target.get("page", page_number))
+            else target.get("figure_position", "before_question")
+        ),
+        "points": target.get("points", 0),
+        "question_bboxes": [],
+        "figure_bboxes": [bbox] if is_question_figure else [],
+        "figure_captions": [caption] if is_question_figure else [],
+        "answer_bboxes": [],
+        "answer_figure_bboxes": [] if is_question_figure else [bbox],
+        "answer_figure_captions": [] if is_question_figure else [caption],
+        "answer_text": "",
+        "answer_subquestions": [],
+        "rubric": "",
+        "page": page_number,
+    }
+
+
 def _repair_figure_assignments(
     items: list[dict[str, Any]], pages: dict[int, dict[str, Any]]
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Repair cross-page figure ownership and keep answer-only diagrams off student pages."""
+    """Repair question/answer figure ownership across adjacent questions and pages."""
     if not items:
         return items, []
 
     templates: dict[str, dict[str, Any]] = {}
     first_pages: dict[str, int] = {}
     primary_texts: dict[str, str] = {}
-    reference_targets: dict[str, dict[str, dict[str, Any]]] = {}
+    primary_answers: dict[str, str] = {}
+    question_targets: dict[str, dict[str, dict[str, Any]]] = {}
+    answer_targets: dict[str, dict[str, dict[str, Any]]] = {}
+    number_targets: dict[str, dict[str, dict[str, Any]]] = {}
+    declared_figures: dict[
+        int, list[tuple[str, str, dict[str, Any], list[float], str]]
+    ] = {}
+    key_order: list[str] = []
     for item in items:
         key = str(item["question_key"])
+        if key not in templates:
+            key_order.append(key)
         templates.setdefault(key, item)
+        normalized_number = re.sub(r"^例\s*", "", _clean_text(item.get("number"), 80))
+        if normalized_number:
+            number_targets.setdefault(normalized_number, {})[key] = item
         first_pages[key] = min(first_pages.get(key, int(item["page"])), int(item["page"]))
         composed = _compose_labeled_text(item.get("question_text"), item.get("subquestions"))
+        answer_composed = _compose_labeled_text(
+            item.get("answer_text"), item.get("answer_subquestions")
+        )
         if len(_comparison_text(composed)) > len(_comparison_text(primary_texts.get(key, ""))):
             primary_texts[key] = composed
+        if answer_composed:
+            primary_answers[key] = "\n".join(
+                value for value in (primary_answers.get(key, ""), answer_composed) if value
+            )
         for caption in _infer_figure_captions(composed):
-            reference_targets.setdefault(caption, {})[key] = item
+            base = _figure_caption_base(caption)
+            if base:
+                question_targets.setdefault(base, {})[key] = item
+        for caption in _infer_figure_captions(answer_composed):
+            base = _figure_caption_base(caption)
+            if base:
+                answer_targets.setdefault(base, {})[key] = item
+        for kind, boxes_name, captions_name in (
+            ("question", "figure_bboxes", "figure_captions"),
+            ("answer", "answer_figure_bboxes", "answer_figure_captions"),
+        ):
+            raw_kind_captions = item.get(captions_name, [])
+            if not isinstance(raw_kind_captions, list):
+                raw_kind_captions = []
+            for index, bbox in enumerate(item.get(boxes_name, [])):
+                declared_figures.setdefault(int(item["page"]), []).append((
+                    kind,
+                    key,
+                    item,
+                    bbox,
+                    _clean_text(raw_kind_captions[index], 160)
+                    if index < len(raw_kind_captions)
+                    else "",
+                ))
 
     continuations: list[dict[str, Any]] = []
     warnings: list[str] = []
     for item in items:
-        figure_boxes = item.get("figure_bboxes", [])
-        if not figure_boxes:
+        question_boxes = list(item.get("figure_bboxes", []))
+        answer_boxes_original = list(item.get("answer_figure_bboxes", []))
+        if not question_boxes and not answer_boxes_original:
             continue
-        explicit_captions = item.get("figure_captions", [])
-        if not isinstance(explicit_captions, list):
-            explicit_captions = []
+        question_captions = item.get("figure_captions", [])
+        if not isinstance(question_captions, list):
+            question_captions = []
+        answer_captions_original = item.get("answer_figure_captions", [])
+        if not isinstance(answer_captions_original, list):
+            answer_captions_original = []
         kept_boxes: list[list[float]] = []
         kept_captions: list[str] = []
-        answer_boxes = item.setdefault("answer_figure_bboxes", [])
-        answer_captions = item.setdefault("answer_figure_captions", [])
+        answer_boxes: list[list[float]] = []
+        answer_captions: list[str] = []
         key = str(item["question_key"])
         page_number = int(item["page"])
         current_text = _compose_labeled_text(
@@ -1504,41 +1848,204 @@ def _repair_figure_assignments(
             or re.search(r"(?:如图|下图|图示|图中|所给.{0,8}图)", primary_texts.get(key, ""))
         )
         answer_evidence = bool(item.get("answer_text") or item.get("answer_bboxes"))
+        first_question_top = min(
+            (bbox[1] for bbox in item.get("question_bboxes", [])),
+            default=1001.0,
+        )
+        previous_key = ""
+        if key in key_order:
+            key_index = key_order.index(key)
+            if key_index > 0:
+                previous_key = key_order[key_index - 1]
+        question_bases = list({
+            _figure_caption_base(caption)
+            for caption in _infer_figure_captions(primary_texts.get(key, ""))
+            if _figure_caption_base(caption)
+        })
+        answer_bases = list({
+            _figure_caption_base(caption)
+            for caption in _infer_figure_captions(primary_answers.get(key, ""))
+            if _figure_caption_base(caption)
+        })
+        candidates = [
+            ("question", bbox, question_captions[index] if index < len(question_captions) else "")
+            for index, bbox in enumerate(question_boxes)
+        ] + [
+            ("answer", bbox, answer_captions_original[index] if index < len(answer_captions_original) else "")
+            for index, bbox in enumerate(answer_boxes_original)
+        ]
 
-        for figure_index, figure_bbox in enumerate(figure_boxes):
-            explicit_caption = (
-                _clean_text(explicit_captions[figure_index], 160)
-                if figure_index < len(explicit_captions)
-                else ""
-            )
+        for origin_kind, figure_bbox, raw_caption in candidates:
+            explicit_caption = _clean_text(raw_caption, 160)
             explicit_labels = _infer_figure_captions(explicit_caption)
             caption = explicit_labels[0] if explicit_labels else explicit_caption
-            if not caption:
-                caption = _nearby_native_figure_caption(
-                    pages.get(page_number), figure_bbox
+            nearby_caption = _nearby_native_figure_caption(
+                pages.get(page_number), figure_bbox
+            )
+            if not _figure_caption_base(caption) and nearby_caption:
+                caption = _caption_with_subpart(
+                    _figure_caption_base(nearby_caption), _figure_subpart(caption)
+                ) or nearby_caption
+            overlapping_declared = [
+                (
+                    _bbox_overlap_ratio(figure_bbox, declared_bbox),
+                    declared_kind,
+                    declared_key,
+                    declared_item,
+                    declared_caption,
                 )
+                for declared_kind, declared_key, declared_item, declared_bbox, declared_caption
+                in declared_figures.get(page_number, [])
+                if declared_key != key
+                and _bbox_overlap_ratio(figure_bbox, declared_bbox) >= 0.72
+            ]
+            forced_figure_target = (
+                max(overlapping_declared, key=lambda value: value[0])
+                if overlapping_declared
+                else None
+            )
+            if (
+                origin_kind == "question"
+                and _figure_caption_base(caption) in question_bases
+            ):
+                # A question figure whose own normalized caption is explicitly
+                # referenced by its prompt is stronger evidence than a foreign
+                # overlapping recovery crop.  This prevents symmetric swaps.
+                forced_figure_target = None
+            if forced_figure_target:
+                declared_caption = forced_figure_target[4]
+                if _figure_caption_base(declared_caption):
+                    caption = declared_caption
             overlaps_answer = any(
                 _bbox_overlap_ratio(figure_bbox, answer_bbox) >= 0.45
                 for answer_bbox in item.get("answer_bboxes", [])
             )
+            after_answer = bool(item.get("answer_bboxes")) and any(
+                figure_bbox[1] >= answer_bbox[1] - 12
+                for answer_bbox in item.get("answer_bboxes", [])
+            )
+            strictly_below_answer = bool(item.get("answer_bboxes")) and (
+                figure_bbox[1]
+                >= max(answer_bbox[3] for answer_bbox in item.get("answer_bboxes", [])) + 8
+            )
             answer_continuation = (
                 page_number > first_pages[key]
                 and answer_evidence
-                and not caption
+                and not _figure_caption_base(caption)
                 and (
                     duplicated_question
                     or (prompt_requests_drawing and not prompt_has_given_figure)
                 )
             )
-            if overlaps_answer or answer_continuation:
-                answer_boxes.append(figure_bbox)
-                answer_captions.append(caption)
-                warnings.append(
-                    f"第{page_number}页第{item['number']}题的答案图已从学生题面移除"
+            if not _figure_caption_base(caption):
+                contextual_bases = (
+                    answer_bases
+                    if overlaps_answer or answer_continuation or after_answer or origin_kind == "answer"
+                    else question_bases
                 )
-                continue
+                if len(contextual_bases) == 1:
+                    caption = _caption_with_subpart(
+                        contextual_bases[0], _figure_subpart(explicit_caption)
+                    )
 
-            possible_targets = reference_targets.get(caption, {}) if caption else {}
+            caption_base = _figure_caption_base(caption)
+            possible_question_targets = question_targets.get(caption_base, {})
+            possible_answer_targets = answer_targets.get(caption_base, {})
+            question_reference_parts = {
+                _figure_subpart(reference)
+                for reference in _infer_figure_captions(primary_texts.get(key, ""))
+                if _figure_caption_base(reference) == caption_base
+                and _figure_subpart(reference)
+            }
+            answer_reference_parts = {
+                _figure_subpart(reference)
+                for reference in _infer_figure_captions(primary_answers.get(key, ""))
+                if _figure_caption_base(reference) == caption_base
+                and _figure_subpart(reference)
+            }
+            if (
+                not forced_figure_target
+                and strictly_below_answer
+                and len(answer_bases) == 1
+                and caption_base not in answer_bases
+            ):
+                caption = answer_bases[0]
+                caption_base = answer_bases[0]
+                possible_question_targets = question_targets.get(caption_base, {})
+                possible_answer_targets = answer_targets.get(caption_base, {})
+                question_reference_parts = {
+                    _figure_subpart(reference)
+                    for reference in _infer_figure_captions(primary_texts.get(key, ""))
+                    if _figure_caption_base(reference) == caption_base
+                    and _figure_subpart(reference)
+                }
+                answer_reference_parts = {
+                    _figure_subpart(reference)
+                    for reference in _infer_figure_captions(primary_answers.get(key, ""))
+                    if _figure_caption_base(reference) == caption_base
+                    and _figure_subpart(reference)
+                }
+            mixed_question_answer_figure = bool(
+                origin_kind == "question"
+                and caption_base
+                and not _figure_subpart(caption)
+                and question_reference_parts
+                and (
+                    answer_reference_parts
+                    or (len(question_reference_parts) == 1 and answer_evidence)
+                )
+            )
+            if mixed_question_answer_figure:
+                possible_question_targets = {}
+                possible_answer_targets = {key: item}
+            ownership_match = re.search(
+                r"题\s*(?:例\s*)?(\d+(?:\.\d+)+)\s*的\s*(图|解)",
+                explicit_caption,
+            )
+            ownership_candidates = (
+                number_targets.get(ownership_match.group(1), {})
+                if ownership_match
+                else {}
+            )
+            if forced_figure_target:
+                target_kind = forced_figure_target[1]
+                possible_targets = {
+                    forced_figure_target[2]: forced_figure_target[3]
+                }
+            elif ownership_candidates:
+                ownership_key = min(
+                    ownership_candidates,
+                    key=lambda candidate: (
+                        abs(first_pages[candidate] - page_number),
+                        first_pages[candidate] > page_number,
+                    ),
+                )
+                ownership_target = ownership_candidates[ownership_key]
+                target_kind = "question" if ownership_match.group(2) == "图" else "answer"
+                possible_targets = {ownership_key: ownership_target}
+            elif possible_question_targets:
+                target_kind = "question"
+                possible_targets = possible_question_targets
+            elif possible_answer_targets:
+                target_kind = "answer"
+                possible_targets = possible_answer_targets
+            elif (
+                origin_kind == "question"
+                and previous_key
+                and figure_bbox[3] <= first_question_top + 8
+                and caption_base not in question_bases
+            ):
+                target_kind = "answer"
+                possible_targets = {previous_key: templates[previous_key]}
+            elif overlaps_answer or answer_continuation or (
+                after_answer and not caption_base
+            ) or origin_kind == "answer":
+                target_kind = "answer"
+                possible_targets = {key: item}
+            else:
+                target_kind = "question"
+                possible_targets = {key: item}
+
             if possible_targets:
                 target_key = min(
                     possible_targets,
@@ -1551,43 +2058,637 @@ def _repair_figure_assignments(
                 target_key = key
             if target_key != key:
                 target = templates[target_key]
-                continuations.append({
-                    "question_key": target_key,
-                    "section_key": target.get("section_key", ""),
-                    "section_title": target.get("section_title", ""),
-                    "number": target.get("number", target_key),
-                    "question_type": target.get("question_type", "other"),
-                    "question_text": "",
-                    "subquestions": [],
-                    "options": [],
-                    "option_columns": 1,
-                    "figure_position": (
-                        "after_question"
-                        if page_number >= first_pages[target_key]
-                        else target.get("figure_position", "before_question")
-                    ),
-                    "points": target.get("points", 0),
-                    "question_bboxes": [],
-                    "figure_bboxes": [figure_bbox],
-                    "figure_captions": [caption],
-                    "answer_bboxes": [],
-                    "answer_figure_bboxes": [],
-                    "answer_figure_captions": [],
-                    "answer_text": "",
-                    "answer_subquestions": [],
-                    "rubric": "",
-                    "page": page_number,
-                })
+                continuations.append(_figure_continuation(
+                    target,
+                    page_number=page_number,
+                    bbox=figure_bbox,
+                    caption=caption,
+                    kind=target_kind,
+                ))
                 warnings.append(
-                    f"第{page_number}页{caption or '题图'}已从第{item['number']}题改归第{target['number']}题"
+                    f"第{page_number}页{caption or '图片'}已从第{item['number']}题改归"
+                    f"第{target['number']}题的{'题面' if target_kind == 'question' else '答案'}"
                 )
                 continue
-            kept_boxes.append(figure_bbox)
-            kept_captions.append(caption)
-        item["figure_bboxes"] = kept_boxes
-        item["figure_captions"] = kept_captions
+            if target_kind == "answer":
+                answer_boxes.append(figure_bbox)
+                answer_captions.append(caption)
+                if origin_kind != "answer":
+                    warnings.append(
+                        f"第{page_number}页第{item['number']}题的答案图已从学生题面移除"
+                    )
+            else:
+                kept_boxes.append(figure_bbox)
+                kept_captions.append(caption)
+        def deduplicate(
+            boxes: list[list[float]], captions: list[str]
+        ) -> tuple[list[list[float]], list[str]]:
+            unique_boxes: list[list[float]] = []
+            unique_captions: list[str] = []
+            seen: set[str] = set()
+            for index, bbox in enumerate(boxes):
+                caption = captions[index] if index < len(captions) else ""
+                signature = _clean_text(caption, 160) or ",".join(str(value) for value in bbox)
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                unique_boxes.append(bbox)
+                unique_captions.append(caption)
+            return unique_boxes, unique_captions
+
+        item["figure_bboxes"], item["figure_captions"] = deduplicate(
+            kept_boxes, kept_captions
+        )
+        item["answer_figure_bboxes"], item["answer_figure_captions"] = deduplicate(
+            answer_boxes, answer_captions
+        )
 
     return items + continuations, list(dict.fromkeys(warnings))
+
+
+def _missing_figure_recovery_prompt(
+    *, question_key: str, number: str, caption: str, page_number: int
+) -> str:
+    return f"""你是电路题库的漏图恢复器。请查看附件第 {page_number} 页，寻找属于题目“{number}”的已知题图“{caption}”。
+只恢复学生作答前必须看到的题图，不要返回“题目答案/题解/解图/等效图/输出结果波形”。如果目标只引用子图(a)，而同一总图中的(b)是解答，只框(a)。bbox 不包含图号文字，使用归一化坐标 [left,top,right,bottom]（0-1000）。本页没有该题图时返回空 recoveries。
+仅返回 JSON：{{"recoveries":[{{"question_key":"{question_key}","caption":"{caption}","figure_bbox":[0,0,1000,1000]}}]}}。"""
+
+
+def _missing_answer_figure_recovery_prompt(
+    *, question_key: str, number: str, caption: str, page_number: int
+) -> str:
+    return f"""你是电路题库的答案图恢复器。请查看附件第 {page_number} 页，寻找题目“{number}”参考答案中的结果图“{caption}”。
+只恢复答案/题解区域实际印刷的目标图，不要返回题目给定电路、下一道题的题图或仅有文字的区域。必须核对目标图附近的图号或“题 {number} 的解”说明；无法确认时返回空 recoveries。bbox 不包含图号文字，使用归一化坐标 [left,top,right,bottom]（0-1000）。
+仅返回 JSON：{{"recoveries":[{{"question_key":"{question_key}","caption":"{caption}","figure_bbox":[0,0,1000,1000]}}]}}。"""
+
+
+def _answer_continuation_prompt(
+    *,
+    target: dict[str, Any],
+    page_number: int,
+    known_answer_parts: list[dict[str, str]],
+) -> str:
+    return f"""你是电路题库的答案恢复器。请查看附件第 {page_number} 页，确认是否包含题目“{target.get('number', '')}”的参考答案（可能在本页，也可能从上一页续排到本页顶部）。
+题干：{_compose_labeled_text(target.get('question_text'), target.get('subquestions'))}
+上一页已经提取的答案小问：{json.dumps(known_answer_parts, ensure_ascii=False)}
+
+规则：
+1. 只转写本页属于目标题、且位于下一道独立题目之前的答案；不得复制已知答案，不得把下一题题干或下一题答案写入。
+2. 若页面以“(2)”等编号继续，必须放入 answer_subquestions，label 只写数字。
+3. 结果图、等效图、波形答案放入 answer_figure_bboxes，不得放入学生题图。bbox 使用归一化坐标 0-1000，不含图号文字。
+4. 本页没有该题答案续文时 found=false。
+
+仅返回 JSON：{{"found":true,"answer_text":"共享续答文字","answer_subquestions":[{{"label":"2","text":"第二问续答"}}],"answer_bboxes":[[0,0,1000,1000]],"answer_figure_bboxes":[[0,0,1000,1000]],"answer_figure_captions":["图1.4.15"]}}。"""
+
+
+def _recover_missing_answer_continuations(
+    client: QwenVisionClient | Any,
+    items: list[dict[str, Any]],
+    pages: dict[int, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in items:
+        grouped.setdefault(str(item["question_key"]), []).append(item)
+
+    additions: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for key, segments in grouped.items():
+        target = segments[0]
+        known_answers = [
+            part
+            for segment in segments
+            for part in _normalize_labeled_parts(segment.get("answer_subquestions", []))
+        ]
+        known_labels = {_part_label(part.get("label")) for part in known_answers}
+        known_answer_text = any(
+            _clean_text(segment.get("answer_text")) for segment in segments
+        )
+        question_labels = {
+            _part_label(part.get("label"))
+            for segment in segments
+            for part in _normalize_labeled_parts(segment.get("subquestions", []))
+        }
+        missing_second = "1" in known_labels and "2" not in known_labels and (
+            "2" in question_labels or len(known_labels) == 1
+        )
+        missing_all = not known_answer_text and not known_answers
+        if not missing_second and not missing_all:
+            continue
+        segment_pages = sorted({int(segment["page"]) for segment in segments})
+        last_page = max(int(segment["page"]) for segment in segments)
+        candidate_pages = (
+            [last_page + 1]
+            if missing_second
+            else list(dict.fromkeys(segment_pages + [last_page + 1]))
+        )
+        for candidate_page in candidate_pages:
+            page = pages.get(candidate_page)
+            if not page:
+                continue
+            try:
+                result = client.complete_json(
+                    _answer_continuation_prompt(
+                        target=target,
+                        page_number=candidate_page,
+                        known_answer_parts=known_answers,
+                    ),
+                    image_bytes=Path(page["path"]).read_bytes(),
+                    image_mime="image/png",
+                )
+            except Exception as exc:
+                warnings.append(
+                    f"第{candidate_page}页第{target.get('number', '')}题答案恢复失败："
+                    f"{_clean_text(exc, 180)}"
+                )
+                continue
+            if not _as_bool(result.get("found", False)):
+                continue
+            answer_text = _clean_text(result.get("answer_text"))
+            answer_subquestions = _normalize_labeled_parts(
+                result.get("answer_subquestions", [])
+            )
+            new_labels = {
+                _part_label(part.get("label")) for part in answer_subquestions
+            } - known_labels
+            answer_figure_bboxes = _bbox_list(
+                result.get("answer_figure_bboxes", [])
+            )
+            if not answer_text and not new_labels and not answer_figure_bboxes:
+                continue
+            additions.append({
+                "question_key": key,
+                "section_key": target.get("section_key", ""),
+                "section_title": target.get("section_title", ""),
+                "number": target.get("number", key),
+                "question_type": target.get("question_type", "other"),
+                "question_text": "",
+                "subquestions": [],
+                "options": [],
+                "option_columns": 1,
+                "figure_position": target.get("figure_position", "after_question"),
+                "points": target.get("points", 0),
+                "question_bboxes": [],
+                "figure_bboxes": [],
+                "figure_captions": [],
+                "answer_bboxes": _bbox_list(result.get("answer_bboxes", [])),
+                "answer_figure_bboxes": answer_figure_bboxes,
+                "answer_figure_captions": [
+                    _clean_text(value, 160)
+                    for value in result.get("answer_figure_captions", [])
+                ] if isinstance(result.get("answer_figure_captions", []), list) else [],
+                "answer_text": answer_text,
+                "answer_subquestions": [
+                    part
+                    for part in answer_subquestions
+                    if _part_label(part.get("label")) in new_labels
+                ],
+                "rubric": "",
+                "page": candidate_page,
+            })
+            recovery_label = "答案续页" if missing_second else "答案"
+            warnings.append(
+                f"第{candidate_page}页已补全第{target.get('number', '')}题的{recovery_label}"
+            )
+            break
+
+    return items + additions, list(dict.fromkeys(warnings))
+
+
+def _recover_missing_question_figures(
+    client: QwenVisionClient | Any,
+    items: list[dict[str, Any]],
+    pages: dict[int, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Recover referenced question figures that the first two passes still omitted."""
+    if not items or not pages:
+        return items, []
+
+    templates: dict[str, dict[str, Any]] = {}
+    primary_texts: dict[str, str] = {}
+    first_pages: dict[str, int] = {}
+    existing_bases: dict[str, set[str]] = {}
+    related_figures: dict[
+        tuple[str, str], list[tuple[int, list[float], str]]
+    ] = {}
+    for item in items:
+        key = str(item["question_key"])
+        templates.setdefault(key, item)
+        first_pages[key] = min(first_pages.get(key, int(item["page"])), int(item["page"]))
+        composed = _compose_labeled_text(item.get("question_text"), item.get("subquestions"))
+        if len(_comparison_text(composed)) > len(_comparison_text(primary_texts.get(key, ""))):
+            primary_texts[key] = composed
+        for caption in item.get("figure_captions", []):
+            base = _figure_caption_base(caption)
+            if base:
+                existing_bases.setdefault(key, set()).add(base)
+        for boxes_name, captions_name in (
+            ("figure_bboxes", "figure_captions"),
+            ("answer_figure_bboxes", "answer_figure_captions"),
+        ):
+            captions = item.get(captions_name, [])
+            if not isinstance(captions, list):
+                captions = []
+            for index, bbox in enumerate(item.get(boxes_name, [])):
+                caption = captions[index] if index < len(captions) else ""
+                base = _figure_caption_base(caption)
+                if base:
+                    related_figures.setdefault((key, base), []).append((
+                        int(item["page"]), bbox, _clean_text(caption, 160)
+                    ))
+
+    warnings: list[str] = []
+    recovered: list[dict[str, Any]] = []
+    for key, text_value in primary_texts.items():
+        for expected_caption in _infer_figure_captions(text_value):
+            expected_base = _figure_caption_base(expected_caption)
+            if not expected_base or expected_base in existing_bases.get(key, set()):
+                continue
+            first_page = first_pages[key]
+            related = related_figures.get((key, expected_base), [])
+            expected_subpart = _figure_subpart(expected_caption)
+            split_recovered = False
+            if expected_subpart in {"a", "b"}:
+                for related_page, related_bbox, related_caption in related:
+                    if _figure_subpart(related_caption):
+                        continue
+                    width = related_bbox[2] - related_bbox[0]
+                    height = related_bbox[3] - related_bbox[1]
+                    if width < height * 1.45:
+                        continue
+                    middle = (related_bbox[0] + related_bbox[2]) / 2
+                    split_bbox = (
+                        [related_bbox[0], related_bbox[1], middle, related_bbox[3]]
+                        if expected_subpart == "a"
+                        else [middle, related_bbox[1], related_bbox[2], related_bbox[3]]
+                    )
+                    target = templates[key]
+                    recovered.append(_figure_continuation(
+                        target,
+                        page_number=related_page,
+                        bbox=split_bbox,
+                        caption=expected_caption,
+                        kind="question",
+                    ))
+                    existing_bases.setdefault(key, set()).add(expected_base)
+                    warnings.append(
+                        f"第{related_page}页{expected_caption}已从同号整图切分并补归"
+                        f"第{target['number']}题"
+                    )
+                    split_recovered = True
+                    break
+            if split_recovered:
+                continue
+            possible_pages = (
+                list(dict.fromkeys(page_number for page_number, _bbox, _caption in related))
+                if related
+                else [page for page in (first_page + 1, first_page) if page in pages]
+            )
+            textual_matches: list[int] = []
+            for page_number, page in pages.items():
+                native_bases = {
+                    _figure_caption_base(raw.get("caption"))
+                    for raw in page.get("native_figure_captions", [])
+                    if isinstance(raw, dict)
+                }
+                if expected_base in native_bases or expected_base in _clean_text(page.get("text")):
+                    textual_matches.append(page_number)
+            if textual_matches:
+                possible_pages = sorted(
+                    set(textual_matches + possible_pages),
+                    key=lambda page_number: (
+                        page_number < first_page,
+                        abs(page_number - first_page),
+                    ),
+                )
+
+            target = templates[key]
+            for page_number in possible_pages[:3]:
+                page = pages[page_number]
+                try:
+                    result = client.complete_json(
+                        _missing_figure_recovery_prompt(
+                            question_key=key,
+                            number=_clean_text(target.get("number"), 80),
+                            caption=expected_caption,
+                            page_number=page_number,
+                        ),
+                        image_bytes=Path(page["path"]).read_bytes(),
+                        image_mime="image/png",
+                    )
+                except Exception as exc:
+                    warnings.append(
+                        f"第{page_number}页{expected_caption}漏图恢复失败：{_clean_text(exc, 180)}"
+                    )
+                    continue
+                raw_recoveries = result.get("recoveries", [])
+                if not isinstance(raw_recoveries, list):
+                    continue
+                valid_bbox: list[float] | None = None
+                for raw in raw_recoveries:
+                    if not isinstance(raw, dict):
+                        continue
+                    boxes = _bbox_list(raw.get("figure_bbox", raw.get("bbox", [])))
+                    if boxes:
+                        valid_bbox = boxes[0]
+                        break
+                if valid_bbox is None:
+                    continue
+                recovered.append(_figure_continuation(
+                    target,
+                    page_number=page_number,
+                    bbox=valid_bbox,
+                    caption=expected_caption,
+                    kind="question",
+                ))
+                existing_bases.setdefault(key, set()).add(expected_base)
+                warnings.append(
+                    f"第{page_number}页{expected_caption}已补归第{target['number']}题"
+                )
+                break
+
+    return items + recovered, list(dict.fromkeys(warnings))
+
+
+def _recover_missing_answer_figures(
+    client: QwenVisionClient | Any,
+    items: list[dict[str, Any]],
+    pages: dict[int, dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """Recover answer figures referenced by extracted solutions but still absent."""
+    if not items or not pages:
+        return items, []
+
+    templates: dict[str, dict[str, Any]] = {}
+    primary_answers: dict[str, str] = {}
+    item_pages: dict[str, set[int]] = {}
+    existing_bases: dict[str, set[str]] = {}
+    for item in items:
+        key = str(item["question_key"])
+        templates.setdefault(key, item)
+        item_pages.setdefault(key, set()).add(int(item["page"]))
+        composed = _compose_labeled_text(
+            item.get("answer_text"), item.get("answer_subquestions")
+        )
+        if composed:
+            primary_answers[key] = "\n".join(
+                value for value in (primary_answers.get(key, ""), composed) if value
+            )
+        for caption in item.get("answer_figure_captions", []):
+            base = _figure_caption_base(caption)
+            if base:
+                existing_bases.setdefault(key, set()).add(base)
+
+    recovered: list[dict[str, Any]] = []
+    warnings: list[str] = []
+    for key, answer_text in primary_answers.items():
+        for expected_caption in _infer_figure_captions(answer_text):
+            expected_base = _figure_caption_base(expected_caption)
+            if not expected_base or expected_base in existing_bases.get(key, set()):
+                continue
+            known_pages = sorted(item_pages.get(key, set()))
+            if not known_pages:
+                continue
+            first_page = known_pages[0]
+            last_page = known_pages[-1]
+            textual_matches = [
+                page_number
+                for page_number, page in pages.items()
+                if expected_base in _clean_text(page.get("text"))
+            ]
+            possible_pages = sorted(
+                {
+                    *known_pages,
+                    last_page + 1,
+                    *textual_matches,
+                } & set(pages),
+                key=lambda page_number: (
+                    page_number not in known_pages,
+                    abs(page_number - last_page),
+                    page_number < first_page,
+                ),
+            )
+            target = templates[key]
+            for page_number in possible_pages[:4]:
+                page = pages[page_number]
+                try:
+                    result = client.complete_json(
+                        _missing_answer_figure_recovery_prompt(
+                            question_key=key,
+                            number=_clean_text(target.get("number"), 80),
+                            caption=expected_caption,
+                            page_number=page_number,
+                        ),
+                        image_bytes=Path(page["path"]).read_bytes(),
+                        image_mime="image/png",
+                    )
+                except Exception as exc:
+                    warnings.append(
+                        f"第{page_number}页{expected_caption}答案图恢复失败："
+                        f"{_clean_text(exc, 180)}"
+                    )
+                    continue
+                raw_recoveries = result.get("recoveries", [])
+                if not isinstance(raw_recoveries, list):
+                    continue
+                valid_bbox: list[float] | None = None
+                for raw in raw_recoveries:
+                    if not isinstance(raw, dict):
+                        continue
+                    boxes = _bbox_list(raw.get("figure_bbox", raw.get("bbox", [])))
+                    if boxes:
+                        valid_bbox = boxes[0]
+                        break
+                if valid_bbox is None:
+                    continue
+                recovered.append(_figure_continuation(
+                    target,
+                    page_number=page_number,
+                    bbox=valid_bbox,
+                    caption=expected_caption,
+                    kind="answer",
+                ))
+                existing_bases.setdefault(key, set()).add(expected_base)
+                warnings.append(
+                    f"第{page_number}页{expected_caption}答案图已补归第{target['number']}题"
+                )
+                break
+
+    return items + recovered, list(dict.fromkeys(warnings))
+
+
+def _deduplicate_overlapping_figures(items: list[dict[str, Any]]) -> None:
+    """Normalize figure labels and drop duplicate overlapping crops per question."""
+    grouped: dict[tuple[str, str, int, str], list[tuple[dict[str, Any], int, list[float]]]] = {}
+    for item in items:
+        key = str(item["question_key"])
+        page_number = int(item["page"])
+        for kind, boxes_name, captions_name in (
+            ("question", "figure_bboxes", "figure_captions"),
+            ("answer", "answer_figure_bboxes", "answer_figure_captions"),
+        ):
+            boxes = item.get(boxes_name, [])
+            captions = item.get(captions_name, [])
+            if not isinstance(captions, list):
+                captions = []
+            normalized_captions: list[str] = []
+            for index, bbox in enumerate(boxes):
+                raw_caption = captions[index] if index < len(captions) else ""
+                inferred = _infer_figure_captions(raw_caption)
+                caption = inferred[0] if inferred else _clean_text(raw_caption, 160)
+                normalized_captions.append(caption)
+                base = _figure_caption_base(caption) or caption
+                grouped.setdefault((key, kind, page_number, base), []).append(
+                    (item, index, bbox)
+                )
+            item[captions_name] = normalized_captions
+
+    removals: dict[tuple[int, str], set[int]] = {}
+    for (_key, kind, _page, _base), entries in grouped.items():
+        ordered = sorted(
+            entries,
+            key=lambda entry: -(
+                (entry[2][2] - entry[2][0]) * (entry[2][3] - entry[2][1])
+            ),
+        )
+        kept: list[list[float]] = []
+        for item, index, bbox in ordered:
+            if any(
+                _bbox_overlap_ratio(bbox, existing) >= 0.72
+                or _bbox_overlap_ratio(existing, bbox) >= 0.72
+                for existing in kept
+            ):
+                removals.setdefault((id(item), kind), set()).add(index)
+            else:
+                kept.append(bbox)
+
+    for item in items:
+        for kind, boxes_name, captions_name in (
+            ("question", "figure_bboxes", "figure_captions"),
+            ("answer", "answer_figure_bboxes", "answer_figure_captions"),
+        ):
+            removed = removals.get((id(item), kind), set())
+            if not removed:
+                continue
+            item[boxes_name] = [
+                bbox for index, bbox in enumerate(item.get(boxes_name, []))
+                if index not in removed
+            ]
+            item[captions_name] = [
+                caption
+                for index, caption in enumerate(item.get(captions_name, []))
+                if index not in removed
+            ]
+
+
+def _prune_redundant_question_figure_variants(items: list[dict[str, Any]]) -> None:
+    """Prefer a complete figure, except when its other subpart belongs to the answer."""
+    question_references: dict[str, list[str]] = {}
+    answer_references: dict[str, list[str]] = {}
+    entries: dict[
+        tuple[str, str], list[tuple[dict[str, Any], int, list[float], str]]
+    ] = {}
+    for item in items:
+        key = str(item["question_key"])
+        question_references.setdefault(key, []).extend(
+            _infer_figure_captions(
+                _compose_labeled_text(item.get("question_text"), item.get("subquestions"))
+            )
+        )
+        answer_references.setdefault(key, []).extend(
+            _infer_figure_captions(
+                _compose_labeled_text(
+                    item.get("answer_text"), item.get("answer_subquestions")
+                )
+            )
+        )
+        captions = item.get("figure_captions", [])
+        if not isinstance(captions, list):
+            captions = []
+        for index, bbox in enumerate(item.get("figure_bboxes", [])):
+            caption = captions[index] if index < len(captions) else ""
+            base = _figure_caption_base(caption)
+            if base:
+                entries.setdefault((key, base), []).append(
+                    (item, index, bbox, caption)
+                )
+
+    removals: dict[int, set[int]] = {}
+    for (key, base), variants in entries.items():
+        broad = [entry for entry in variants if not _figure_subpart(entry[3])]
+        subparts = [entry for entry in variants if _figure_subpart(entry[3])]
+        if not broad or not subparts:
+            continue
+        question_subparts = {
+            _figure_subpart(reference)
+            for reference in question_references.get(key, [])
+            if _figure_caption_base(reference) == base and _figure_subpart(reference)
+        }
+        answer_uses_same_base = any(
+            _figure_caption_base(reference) == base
+            for reference in answer_references.get(key, [])
+        )
+        if answer_uses_same_base and question_subparts:
+            keep = {
+                (id(item), index)
+                for item, index, _bbox, caption in subparts
+                if _figure_subpart(caption) in question_subparts
+            }
+        else:
+            largest = max(
+                broad,
+                key=lambda entry: (
+                    (entry[2][2] - entry[2][0]) * (entry[2][3] - entry[2][1])
+                ),
+            )
+            keep = {(id(largest[0]), largest[1])}
+        for item, index, _bbox, _caption in variants:
+            if (id(item), index) not in keep:
+                removals.setdefault(id(item), set()).add(index)
+
+    for item in items:
+        removed = removals.get(id(item), set())
+        if not removed:
+            continue
+        item["figure_bboxes"] = [
+            bbox for index, bbox in enumerate(item.get("figure_bboxes", []))
+            if index not in removed
+        ]
+        item["figure_captions"] = [
+            caption
+            for index, caption in enumerate(item.get("figure_captions", []))
+            if index not in removed
+        ]
+
+
+def _repair_small_signal_input_units(items: list[dict[str, Any]]) -> None:
+    """Cross-check small-signal input units against thermal voltage and answer units."""
+    grouped_answers: dict[str, str] = {}
+    for item in items:
+        key = str(item["question_key"])
+        answer = _compose_labeled_text(
+            item.get("answer_text"), item.get("answer_subquestions")
+        )
+        if answer:
+            grouped_answers[key] = "\n".join(
+                value for value in (grouped_answers.get(key, ""), answer) if value
+            )
+    signal_pattern = re.compile(
+        r"(v_i(?:\(t\))?\s*=\s*\d+(?:\.\d+)?\s*\\sin\s*\\omega\s*t\s*\\,?)"
+        r"\\mathrm\{V\}"
+    )
+    for item in items:
+        text = _clean_text(item.get("question_text"))
+        answer = grouped_answers.get(str(item["question_key"]), "")
+        if (
+            not text
+            or "V_T" not in text
+            or not re.search(r"V_T.{0,30}\\mathrm\{mV\}", text)
+            or "\\mathrm{mA}" not in answer
+        ):
+            continue
+        item["question_text"] = signal_pattern.sub(
+            r"\1\\mathrm{mV}", text, count=1
+        )
 
 
 def _save_question_assets(
@@ -1697,7 +2798,22 @@ def _save_question_assets(
                 kind="answer-figure",
                 destination=answer_figures,
             )
-    return [], figures, answer_figures
+    def deduplicate_assets(values: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        seen_captions: set[str] = set()
+        for value in values:
+            caption = _clean_text(value.get("caption"), 160)
+            if caption and caption in seen_captions:
+                duplicate_path = assets_dir / str(value.get("file", ""))
+                if duplicate_path.is_file() and duplicate_path.parent == assets_dir:
+                    duplicate_path.unlink()
+                continue
+            if caption:
+                seen_captions.add(caption)
+            result.append(value)
+        return result
+
+    return [], deduplicate_assets(figures), deduplicate_assets(answer_figures)
 
 
 def process_homework(
@@ -1720,6 +2836,12 @@ def process_homework(
     document_label = "题库" if is_question_bank else "作业"
     try:
         raw, source_path = source_reader(homework_id)
+        updater(
+            homework_id,
+            status="processing",
+            processing_error="",
+            processing_owner_pid=os.getpid(),
+        )
         if client is None:
             if not settings.qwen_api_key:
                 raise RuntimeError(
@@ -1757,6 +2879,7 @@ def process_homework(
         for page_index, page in enumerate(pages, 1):
             with Image.open(page["path"]) as image:
                 regions = _normalized_regions(adapter, image)
+                page["regions"] = regions
                 try:
                     result = client.complete_json(
                         _page_prompt(page, regions, previous_items),
@@ -1768,6 +2891,29 @@ def process_homework(
                     logger.warning("Homework page %s extraction failed: %s", page["page"], exc)
                     continue
             page_items = _normalized_page_items(result, int(page["page"]))
+            if len(pages) > 1 and (page_items or previous_items):
+                try:
+                    review_result = client.complete_json(
+                        _page_review_prompt(page, regions, previous_items, page_items),
+                        image_bytes=Path(page["path"]).read_bytes(),
+                        image_mime="image/png",
+                    )
+                    reviewed_items = _normalized_page_items(
+                        review_result, int(page["page"])
+                    )
+                    if reviewed_items and len(reviewed_items) >= len(page_items):
+                        page_items = reviewed_items
+                    raw_review_warnings = review_result.get("warnings", [])
+                    if isinstance(raw_review_warnings, list):
+                        warnings.extend(
+                            _clean_text(item, 240)
+                            for item in raw_review_warnings
+                            if _clean_text(item, 240)
+                        )
+                except Exception as exc:
+                    warnings.append(
+                        f"第 {page['page']} 页二次复核失败，已保留首次结果：{_clean_text(exc, 240)}"
+                    )
             recovery_candidates: dict[str, dict[str, Any]] = {}
             for item in all_items + page_items:
                 if (
@@ -1824,10 +2970,30 @@ def process_homework(
         warnings.extend(consolidation_warnings)
         if not all_items:
             raise RuntimeError("附件中没有识别到可直接布置的独立题目")
+        _normalize_document_metadata(all_items)
+        all_items, answer_continuation_warnings = _recover_missing_answer_continuations(
+            client, all_items, page_map
+        )
+        warnings.extend(answer_continuation_warnings)
         all_items, figure_assignment_warnings = _repair_figure_assignments(
             all_items, page_map
         )
         warnings.extend(figure_assignment_warnings)
+        all_items, missing_figure_warnings = _recover_missing_question_figures(
+            client, all_items, page_map
+        )
+        warnings.extend(missing_figure_warnings)
+        all_items, missing_answer_figure_warnings = _recover_missing_answer_figures(
+            client, all_items, page_map
+        )
+        warnings.extend(missing_answer_figure_warnings)
+        all_items, final_figure_assignment_warnings = _repair_figure_assignments(
+            all_items, page_map
+        )
+        warnings.extend(final_figure_assignment_warnings)
+        _deduplicate_overlapping_figures(all_items)
+        _prune_redundant_question_figure_variants(all_items)
+        _repair_small_signal_input_units(all_items)
         choice_items: dict[str, list[dict[str, Any]]] = {}
         for item in all_items:
             if _question_type(item["question_type"]) == "choice":
@@ -1948,7 +3114,8 @@ def process_homework(
             processing_warnings=list(dict.fromkeys(warnings))[:30],
             processing_progress=100,
             processing_message=f"{document_label}内容与参考答案的结构化数据已生成",
-            extraction_schema_version=4,
+            extraction_schema_version=5,
+            processing_owner_pid=None,
         )
     except Exception as exc:
         logger.exception("%s extraction failed for %s", document_label, homework_id)
@@ -1959,6 +3126,7 @@ def process_homework(
                 processing_error=_clean_text(exc, 1000),
                 processing_progress=0,
                 processing_message="识别失败",
+                processing_owner_pid=None,
             )
         except Exception:
             logger.exception("Unable to persist homework extraction failure")

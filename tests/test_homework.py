@@ -1,5 +1,6 @@
 import io
 import json
+import os
 
 import fitz
 import pytest
@@ -9,13 +10,21 @@ from backend.app.services.homework import (
     HomeworkStore,
     _choice_recovery_prompt,
     _consolidate_question_keys,
+    _deduplicate_overlapping_figures,
     _grading_reference,
     _infer_figure_captions,
     _merge_prompt_parts,
     _native_inline_answer_bboxes,
+    _normalize_document_metadata,
     _normalized_page_items,
     _page_prompt,
+    _page_review_prompt,
+    _prune_redundant_question_figure_variants,
+    _recover_missing_answer_continuations,
+    _recover_missing_answer_figures,
+    _recover_missing_question_figures,
     _repair_figure_assignments,
+    _repair_small_signal_input_units,
     _split_labeled_text,
     grade_submission,
     process_homework,
@@ -377,6 +386,614 @@ def test_later_answer_diagram_is_removed_from_student_figures():
     assert any("答案图已从学生题面移除" in warning for warning in warnings)
 
 
+def test_question_and_answer_figures_are_reassigned_by_references():
+    def segment(key, number, prompt, answer=""):
+        return {
+            "question_key": key,
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": number,
+            "question_type": "calculation",
+            "question_text": prompt,
+            "subquestions": [],
+            "options": [],
+            "option_columns": 1,
+            "figure_position": "after_question",
+            "points": 0,
+            "question_bboxes": [],
+            "figure_bboxes": [],
+            "figure_captions": [],
+            "answer_bboxes": [],
+            "answer_figure_bboxes": [],
+            "answer_figure_captions": [],
+            "answer_text": answer,
+            "answer_subquestions": [],
+            "rubric": "",
+            "page": 1,
+        }
+
+    question_125 = segment(
+        "1.4-1.2.5", "1.2.5", "电路如图1.4.4所示。", "波形如图1.4.5所示。"
+    )
+    question_132 = segment("1.4-1.3.2", "1.3.2", "电路如图1.4.7所示。")
+    question_132.update({
+        "figure_bboxes": [[100, 100, 300, 300]],
+        "figure_captions": ["图1.4.5"],
+        "page": 2,
+    })
+    example_135 = segment(
+        "1.3-例1.3.5", "例1.3.5", "例题电路如图1.3.9所示。"
+    )
+    example_135["section_key"] = "1.3"
+    example_135["page"] = 1
+    question_135 = segment(
+        "1.4-1.3.5", "1.3.5", "电路如图1.4.12所示。", "波形如图1.4.13所示。"
+    )
+    question_135["page"] = 2
+    question_136 = segment(
+        "1.4-1.3.6", "1.3.6", "电路如图1.4.14所示。", "波形如图1.4.15(a)所示。"
+    )
+    question_136.update({
+        "figure_bboxes": [
+            [100, 100, 400, 250],
+            [100, 500, 400, 700],
+        ],
+        "figure_captions": ["图1.4.14", "(a)"],
+        "answer_bboxes": [[50, 350, 900, 450]],
+        "answer_figure_bboxes": [
+            [500, 100, 800, 250],
+            [500, 260, 800, 410],
+        ],
+        "answer_figure_captions": [
+            "图1.4.12 题1.3.5的图",
+            "图1.4.13 题1.3.5的解",
+        ],
+        "page": 3,
+    })
+
+    repaired, _ = _repair_figure_assignments(
+        [example_135, question_125, question_132, question_135, question_136],
+        {1: {"native_figure_captions": []}, 2: {"native_figure_captions": []}, 3: {"native_figure_captions": []}},
+    )
+
+    repaired_132 = next(
+        item for item in repaired if item["question_key"] == "1.4-1.3.2" and item["page"] == 2
+    )
+    repaired_136 = next(
+        item for item in repaired if item["question_key"] == "1.4-1.3.6" and item["page"] == 3
+    )
+    assert repaired_132["figure_bboxes"] == []
+    assert repaired_136["figure_captions"] == ["图1.4.14"]
+    assert repaired_136["answer_figure_captions"] == ["图1.4.15（a）"]
+    assert any(
+        item["question_key"] == "1.4-1.2.5"
+        and item["answer_figure_captions"] == ["图1.4.5"]
+        for item in repaired
+    )
+    assert any(
+        item["question_key"] == "1.4-1.3.5"
+        and item["figure_captions"] == ["图1.4.12"]
+        for item in repaired
+    )
+    assert any(
+        item["question_key"] == "1.4-1.3.5"
+        and item["answer_figure_captions"] == ["图1.4.13"]
+        for item in repaired
+    )
+    assert not any(
+        item["question_key"] == "1.3-例1.3.5"
+        and (item["figure_captions"] or item["answer_figure_captions"])
+        for item in repaired
+    )
+
+
+def test_mixed_question_and_solution_subfigures_leave_student_side():
+    item = {
+        "question_key": "1.3-例1.3.3",
+        "section_key": "1.3",
+        "section_title": "1.3 例题解析",
+        "number": "例1.3.3",
+        "question_type": "calculation",
+        "question_text": "电路如图1.3.4(a)所示。",
+        "subquestions": [],
+        "options": [],
+        "option_columns": 1,
+        "figure_position": "after_question",
+        "points": 0,
+        "question_bboxes": [[100, 100, 900, 200]],
+        "figure_bboxes": [[100, 250, 900, 500]],
+        "figure_captions": ["图1.3.4"],
+        "answer_bboxes": [[100, 550, 900, 700]],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+        "answer_text": "等效电路如图1.3.4(b)所示。",
+        "answer_subquestions": [],
+        "rubric": "",
+        "page": 1,
+    }
+
+    repaired, _ = _repair_figure_assignments(
+        [item], {1: {"native_figure_captions": []}}
+    )
+
+    assert repaired[0]["figure_bboxes"] == []
+    assert repaired[0]["answer_figure_captions"] == ["图1.3.4"]
+
+
+def test_figure_strictly_below_answer_is_relabelled_as_answer_figure():
+    item = {
+        "question_key": "1.4-题1.3.6",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.3.6",
+        "question_type": "calculation",
+        "question_text": "电路如图1.4.14所示，分析输出波形。",
+        "subquestions": [],
+        "options": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "question_bboxes": [[100, 350, 900, 410]],
+        "figure_bboxes": [[180, 540, 830, 890]],
+        "figure_captions": ["图1.4.14"],
+        "answer_bboxes": [[120, 430, 600, 515]],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+        "answer_text": "输出波形如图1.4.15所示。",
+        "answer_subquestions": [],
+        "rubric": "",
+        "page": 17,
+    }
+
+    repaired, _ = _repair_figure_assignments(
+        [item], {17: {"native_figure_captions": []}}
+    )
+
+    assert repaired[0]["figure_bboxes"] == []
+    assert repaired[0]["answer_figure_captions"] == ["图1.4.15"]
+
+
+def test_recovered_answer_crop_overlapping_next_question_figure_is_reassigned():
+    previous = {
+        "question_key": "1.4-题1.3.6",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.3.6",
+        "question_type": "calculation",
+        "question_text": "电路如图1.4.14所示。",
+        "subquestions": [],
+        "options": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "question_bboxes": [],
+        "figure_bboxes": [],
+        "figure_captions": [],
+        "answer_bboxes": [[100, 100, 900, 350]],
+        "answer_figure_bboxes": [[540, 428, 760, 545]],
+        "answer_figure_captions": ["图1.4.15（c）"],
+        "answer_text": "分段线性模型答案如图1.4.15(c)所示。",
+        "answer_subquestions": [],
+        "rubric": "",
+        "page": 18,
+    }
+    following = {
+        "question_key": "1.4-题1.3.7",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.3.7",
+        "question_type": "calculation",
+        "question_text": "绘出图1.4.16(a)所示电路的输出波形。",
+        "subquestions": [],
+        "options": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "question_bboxes": [[130, 356, 920, 414]],
+        "figure_bboxes": [[271, 424, 762, 546]],
+        "figure_captions": ["图1.4.16"],
+        "answer_bboxes": [],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+        "answer_text": "",
+        "answer_subquestions": [],
+        "rubric": "",
+        "page": 18,
+    }
+
+    repaired, _ = _repair_figure_assignments(
+        [previous, following], {18: {"native_figure_captions": []}}
+    )
+
+    assert repaired[0]["answer_figure_bboxes"] == []
+    reassigned = [
+        item
+        for item in repaired[2:]
+        if item["question_key"] == following["question_key"]
+    ]
+    assert reassigned
+    assert reassigned[0]["figure_captions"] == ["图1.4.16"]
+
+
+def test_document_metadata_preserves_examples_and_full_dotted_numbers():
+    items = [
+        {
+            "question_key": "1.3-1.3.1",
+            "section_key": "1.3",
+            "section_title": "1.3 例题解析",
+            "number": "1.3.1",
+        },
+        {
+            "question_key": "1.3-1.3.2",
+            "section_key": "1.3",
+            "section_title": "1.3 二极管及其基本电路",
+            "number": "1.3.2",
+        },
+        {
+            "question_key": "1.4-1.1",
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": "1.1",
+        },
+        {
+            "question_key": "1.4-1.2",
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": "1.2",
+        },
+        {
+            "question_key": "1.4-1.2.1",
+            "section_key": "1.4",
+            "section_title": "1.2 习题解答",
+            "number": "1.2.1",
+        },
+        {
+            "question_key": "1.3-1.3.1",
+            "section_key": "1.3",
+            "section_title": "1.3 习题解答",
+            "number": "1.3.1",
+        },
+        {
+            "question_key": "1.4-例1.3.2",
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": "例 1.3.2",
+        },
+    ]
+
+    _normalize_document_metadata(items)
+
+    assert [item["number"] for item in items] == [
+        "例1.3.1",
+        "例1.3.2",
+        "1.1.1",
+        "1.1.2",
+        "1.2.1",
+        "1.3.1",
+        "1.3.2",
+    ]
+    assert items[1]["section_title"] == "1.3 例题解析"
+    assert items[-1]["section_title"] == "1.4 习题解答"
+    assert items[0]["question_key"] != items[-1]["question_key"]
+    assert items[-1]["question_key"] == "1.4-题1.3.2"
+
+
+def test_answer_only_false_example_continues_previous_exercise():
+    items = [
+        {
+            "question_key": "1.4-题1.2.5",
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": "1.2.5",
+            "question_text": "电路如图1.4.4所示，求输出波形。",
+            "question_bboxes": [[100, 100, 900, 180]],
+        },
+        {
+            "question_key": "1.4-例1.3.1",
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": "例 1.3.1",
+            "question_text": "",
+            "question_bboxes": [],
+            "answer_text": "输出波形如图1.4.5所示。",
+            "answer_bboxes": [[100, 200, 900, 300]],
+            "figure_bboxes": [[300, 400, 700, 650]],
+            "figure_captions": ["图1.4.6"],
+        },
+        {
+            "question_key": "1.4-题1.3.1",
+            "section_key": "1.4",
+            "section_title": "1.4 习题解答",
+            "number": "1.3.1",
+            "question_text": "某二极管的伏安特性如图1.4.6所示。",
+            "question_bboxes": [[100, 700, 900, 760]],
+        },
+    ]
+
+    _normalize_document_metadata(items)
+
+    assert items[1]["number"] == "1.2.5"
+    assert items[1]["question_key"] == items[0]["question_key"]
+    assert items[2]["question_key"] == "1.4-题1.3.1"
+
+
+def test_missing_cross_page_question_figure_is_recovered_from_next_page(tmp_path):
+    page_1 = tmp_path / "page-001.png"
+    page_2 = tmp_path / "page-002.png"
+    Image.new("RGB", (1000, 1000), "white").save(page_1)
+    Image.new("RGB", (1000, 1000), "white").save(page_2)
+    item = {
+        "question_key": "1.4-1.3.5",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.3.5",
+        "question_type": "calculation",
+        "question_text": "电路如图1.4.12所示，求输出波形。",
+        "subquestions": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "figure_bboxes": [],
+        "figure_captions": [],
+        "page": 1,
+    }
+    client = FakeVisionClient({
+        "recoveries": [{
+            "question_key": "1.4-1.3.5",
+            "caption": "图1.4.12",
+            "figure_bbox": [100, 100, 800, 400],
+        }]
+    })
+
+    recovered, warnings = _recover_missing_question_figures(
+        client,
+        [item],
+        {
+            1: {"page": 1, "path": page_1, "text": "", "native_figure_captions": []},
+            2: {"page": 2, "path": page_2, "text": "", "native_figure_captions": []},
+        },
+    )
+
+    continuation = next(value for value in recovered if value["page"] == 2)
+    assert continuation["question_key"] == "1.4-1.3.5"
+    assert continuation["figure_captions"] == ["图1.4.12"]
+    assert any("已补归第1.3.5题" in warning for warning in warnings)
+
+
+def test_single_question_subpart_is_split_from_related_answer_figure(tmp_path):
+    page = tmp_path / "mixed-subfigure-page.png"
+    Image.new("RGB", (1000, 1000), "white").save(page)
+    item = {
+        "question_key": "1.3-例1.3.3",
+        "section_key": "1.3",
+        "section_title": "1.3 例题解析",
+        "number": "例1.3.3",
+        "question_type": "calculation",
+        "question_text": "电路如图1.3.4(a)所示。",
+        "subquestions": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "figure_bboxes": [],
+        "figure_captions": [],
+        "answer_figure_bboxes": [[100, 200, 900, 600]],
+        "answer_figure_captions": ["图1.3.4"],
+        "page": 2,
+    }
+
+    recovered, warnings = _recover_missing_question_figures(
+        FakeVisionClient(),
+        [item],
+        {2: {"page": 2, "path": page, "text": ""}},
+    )
+
+    continuation = next(value for value in recovered if value is not item)
+    assert continuation["figure_bboxes"] == [[100, 200, 500, 600]]
+    assert continuation["figure_captions"] == ["图1.3.4（a）"]
+    assert any("同号整图切分" in warning for warning in warnings)
+
+
+def test_missing_referenced_answer_figure_is_recovered(tmp_path):
+    page_1 = tmp_path / "answer-figure-page-001.png"
+    page_2 = tmp_path / "answer-figure-page-002.png"
+    Image.new("RGB", (1000, 1000), "white").save(page_1)
+    Image.new("RGB", (1000, 1000), "white").save(page_2)
+    item = {
+        "question_key": "1.4-题1.2.5",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.2.5",
+        "question_type": "design",
+        "question_text": "画出输出波形。",
+        "subquestions": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "answer_text": "输出波形如图1.4.5所示。",
+        "answer_subquestions": [],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+        "page": 2,
+    }
+    client = FakeVisionClient({
+        "recoveries": [{
+            "question_key": "1.4-题1.2.5",
+            "caption": "图1.4.5",
+            "figure_bbox": [150, 200, 850, 650],
+        }]
+    })
+
+    recovered, warnings = _recover_missing_answer_figures(
+        client,
+        [item],
+        {
+            1: {"page": 1, "path": page_1, "text": ""},
+            2: {"page": 2, "path": page_2, "text": "图1.4.5"},
+        },
+    )
+
+    continuation = next(value for value in recovered if value is not item)
+    assert continuation["answer_figure_captions"] == ["图1.4.5"]
+    assert any("答案图已补归第1.2.5题" in warning for warning in warnings)
+
+
+def test_overlapping_same_figure_crops_are_normalized_and_deduplicated():
+    first = {
+        "question_key": "1.3-例1.3.2",
+        "page": 10,
+        "figure_bboxes": [[100, 100, 500, 700]],
+        "figure_captions": ["图1.3.3"],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+    }
+    duplicate = {
+        "question_key": "1.3-例1.3.2",
+        "page": 10,
+        "figure_bboxes": [[110, 110, 490, 690]],
+        "figure_captions": ["图 1.3.3 例 1.3.2 的图"],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+    }
+
+    _deduplicate_overlapping_figures([first, duplicate])
+
+    assert first["figure_captions"] == ["图1.3.3"]
+    assert duplicate["figure_bboxes"] == []
+    assert duplicate["figure_captions"] == []
+
+
+def test_complete_question_figure_prunes_redundant_subpart_crops():
+    item = {
+        "question_key": "1.4-题1.3.2",
+        "page": 15,
+        "question_text": "二极管电路如图1.4.7所示，并判断图1.4.7(a)(b)(c)。",
+        "subquestions": [],
+        "answer_text": "分析各支路状态。",
+        "answer_subquestions": [],
+        "figure_bboxes": [
+            [100, 100, 900, 700],
+            [100, 100, 450, 350],
+            [500, 100, 900, 350],
+        ],
+        "figure_captions": ["图1.4.7", "图1.4.7（a）", "图1.4.7（b）"],
+    }
+
+    _prune_redundant_question_figure_variants([item])
+
+    assert item["figure_bboxes"] == [[100, 100, 900, 700]]
+    assert item["figure_captions"] == ["图1.4.7"]
+
+
+def test_small_signal_input_unit_is_repaired_from_answer_consistency():
+    question = {
+        "question_key": "1.4-题1.3.8",
+        "question_text": (
+            "常温下 $V_T = 26\\,\\mathrm{mV}$，"
+            "$v_i(t) = 15\\sin\\omega t\\,\\mathrm{V}$。"
+        ),
+        "subquestions": [],
+        "answer_text": "",
+        "answer_subquestions": [],
+    }
+    answer = {
+        "question_key": "1.4-题1.3.8",
+        "question_text": "",
+        "subquestions": [],
+        "answer_text": "$i_d(t)=1.5\\sin\\omega t\\,\\mathrm{mA}$",
+        "answer_subquestions": [],
+    }
+
+    _repair_small_signal_input_units([question, answer])
+
+    assert "15\\sin\\omega t\\,\\mathrm{mV}" in question["question_text"]
+
+
+def test_missing_second_answer_part_is_recovered_from_next_page(tmp_path):
+    page_1 = tmp_path / "answer-page-001.png"
+    page_2 = tmp_path / "answer-page-002.png"
+    Image.new("RGB", (1000, 1000), "white").save(page_1)
+    Image.new("RGB", (1000, 1000), "white").save(page_2)
+    item = {
+        "question_key": "1.4-题1.2.3",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.2.3",
+        "question_type": "calculation",
+        "question_text": "试计算：",
+        "subquestions": [
+            {"label": "1", "text": "第一问"},
+            {"label": "2", "text": "第二问"},
+        ],
+        "figure_position": "after_question",
+        "points": 0,
+        "answer_subquestions": [{"label": "1", "text": "第一问答案"}],
+        "page": 1,
+    }
+    client = FakeVisionClient({
+        "found": True,
+        "answer_text": "",
+        "answer_subquestions": [{"label": "2", "text": "第二问答案"}],
+        "answer_bboxes": [[100, 100, 900, 300]],
+        "answer_figure_bboxes": [],
+        "answer_figure_captions": [],
+    })
+
+    recovered, warnings = _recover_missing_answer_continuations(
+        client,
+        [item],
+        {
+            1: {"page": 1, "path": page_1},
+            2: {"page": 2, "path": page_2},
+        },
+    )
+
+    continuation = next(value for value in recovered if value["page"] == 2)
+    assert continuation["answer_subquestions"] == [
+        {"label": "2", "text": "第二问答案"}
+    ]
+    assert any("答案续页" in warning for warning in warnings)
+
+
+def test_entire_missing_answer_is_recovered_from_question_pages(tmp_path):
+    page_1 = tmp_path / "missing-answer-page-001.png"
+    page_2 = tmp_path / "missing-answer-page-002.png"
+    Image.new("RGB", (1000, 1000), "white").save(page_1)
+    Image.new("RGB", (1000, 1000), "white").save(page_2)
+    item = {
+        "question_key": "1.4-题1.2.5",
+        "section_key": "1.4",
+        "section_title": "1.4 习题解答",
+        "number": "1.2.5",
+        "question_type": "design",
+        "question_text": "电路如图1.4.4所示，画出输出波形。",
+        "subquestions": [],
+        "figure_position": "after_question",
+        "points": 0,
+        "answer_text": "",
+        "answer_subquestions": [],
+        "page": 1,
+    }
+    client = FakeVisionClient(
+        {"found": False},
+        {
+            "found": True,
+            "answer_text": "输出波形如图1.4.5所示。",
+            "answer_subquestions": [],
+            "answer_bboxes": [[100, 100, 900, 300]],
+            "answer_figure_bboxes": [[200, 320, 800, 700]],
+            "answer_figure_captions": ["图1.4.5"],
+        },
+    )
+
+    recovered, warnings = _recover_missing_answer_continuations(
+        client,
+        [item],
+        {
+            1: {"page": 1, "path": page_1},
+            2: {"page": 2, "path": page_2},
+        },
+    )
+
+    continuation = next(value for value in recovered if value["page"] == 2)
+    assert continuation["answer_text"] == "输出波形如图1.4.5所示。"
+    assert continuation["answer_figure_captions"] == ["图1.4.5"]
+    assert any("已补全第1.2.5题的答案" in warning for warning in warnings)
+
+
 def test_submission_is_graded_then_independently_reviewed(tmp_path):
     store = HomeworkStore(tmp_path / "homework")
     homework_id, question_id = extracted_homework(store)
@@ -443,6 +1060,25 @@ def test_interrupted_processing_becomes_retryable_after_restart(tmp_path):
 
     assert recovered["status"] == "error"
     assert "重新识别" in recovered["processing_error"]
+
+
+def test_active_processing_owner_is_not_misreported_as_interrupted(tmp_path):
+    root = tmp_path / "homework"
+    store = HomeworkStore(root)
+    created = store.create_homework(
+        title="活动任务测试",
+        instructions="",
+        due_at="",
+        filename="exercise.png",
+        content_type="image/png",
+        data=sample_image_bytes(),
+    )
+    store.update_homework(created["id"], processing_owner_pid=os.getpid())
+
+    active = HomeworkStore(root).get_homework(created["id"], role="teacher")
+
+    assert active["status"] == "processing"
+    assert active["processing_error"] == ""
 
 
 def test_whole_document_pass_separates_new_cross_page_question_numbers():
@@ -702,8 +1338,26 @@ def test_page_prompt_filters_book_explanations_and_requires_structured_subquesti
     assert "figure_captions 与 figure_bboxes" in prompt
     assert "answer_figure_bboxes" in prompt
     assert "答案页画出的电路绝不能进入 figure_bboxes" in prompt
+    assert "1.1.1”不能缩成“1.1" in prompt
+    assert "15\\,\\mathrm{mV}" in prompt
+    assert "上一题的答案续文" in prompt
     assert '"figure_captions":["图1.3"]' in prompt
     assert "题目卷" not in prompt
+
+
+def test_page_review_prompt_checks_numbers_units_and_cross_page_ownership():
+    prompt = _page_review_prompt(
+        {"page": 19, "text": "例1.3.1 1.1.1 15mV"},
+        [],
+        [{"key": "1.4-1.3.5", "number": "1.3.5"}],
+        [{"question_key": "1.4-1.3.6", "number": "1.3.6"}],
+    )
+
+    assert "逐页复核员" in prompt
+    assert "例1.3.1”不能变成“1.3.1" in prompt
+    assert "V、mV、A、mA" in prompt
+    assert "上一题答案不得进入下一题答案" in prompt
+    assert '"number":"例1.3.1"' in prompt
 
 
 def test_guidance_book_question_and_answer_parts_are_normalized_for_layout_and_grading():
