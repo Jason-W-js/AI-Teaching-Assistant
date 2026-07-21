@@ -88,8 +88,31 @@ def _process_is_running(value: Any) -> bool:
     return True
 
 
+_UNICODE_SURROGATE_PATTERN = re.compile(r"[\ud800-\udfff]")
+
+
+def _utf8_safe_text(value: str) -> str:
+    """Replace lone UTF-16 surrogates that cannot be persisted as UTF-8."""
+    return _UNICODE_SURROGATE_PATTERN.sub("\ufffd", value)
+
+
+def _utf8_safe_json(value: Any) -> Any:
+    """Recursively sanitize model output before JSON persistence."""
+    if isinstance(value, str):
+        return _utf8_safe_text(value)
+    if isinstance(value, dict):
+        return {
+            _utf8_safe_text(key) if isinstance(key, str) else key: _utf8_safe_json(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_utf8_safe_json(item) for item in value]
+    return value
+
+
 def _clean_text(value: Any, limit: int = 24000) -> str:
-    return re.sub(r"[ \t]+", " ", str(value or "")).strip()[:limit]
+    text = _utf8_safe_text(str(value or ""))
+    return re.sub(r"[ \t]+", " ", text).strip()[:limit]
 
 
 def _as_bool(value: Any) -> bool:
@@ -350,7 +373,8 @@ class HomeworkStore:
     def _write(self, value: dict[str, list[dict[str, Any]]]) -> None:
         temporary = self.index_path.with_suffix(".tmp")
         temporary.write_text(
-            json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8"
+            json.dumps(_utf8_safe_json(value), ensure_ascii=False, indent=2),
+            encoding="utf-8",
         )
         temporary.replace(self.index_path)
 

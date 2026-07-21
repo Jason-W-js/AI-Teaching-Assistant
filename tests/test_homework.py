@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 from backend.app.services.homework import (
     HomeworkStore,
     _choice_recovery_prompt,
+    _clean_text,
     _consolidate_question_keys,
     _deduplicate_overlapping_figures,
     _grading_reference,
@@ -57,6 +58,28 @@ def sample_image_bytes() -> bytes:
     output = io.BytesIO()
     image.save(output, format="PNG")
     return output.getvalue()
+
+
+def test_invalid_unicode_surrogates_are_replaced_before_persistence(tmp_path):
+    store = HomeworkStore(tmp_path / "homework")
+    created = store.create_question_bank(
+        title="Unicode 题库",
+        filename="unicode.png",
+        content_type="image/png",
+        data=sample_image_bytes(),
+    )
+
+    store.update_question_bank(
+        created["id"],
+        processing_error="模型返回非法字符：\udc01",
+        questions=[{"id": "q1", "prompt": "PN 结\ud800测试"}],
+    )
+
+    raw = store.get_raw_question_bank(created["id"])
+    assert raw["processing_error"] == "模型返回非法字符：�"
+    assert raw["questions"][0]["prompt"] == "PN 结�测试"
+    assert _clean_text("a\udc01b") == "a�b"
+    store.index_path.read_bytes().decode("utf-8", errors="strict")
 
 
 def extracted_homework(store: HomeworkStore) -> tuple[str, str]:
