@@ -1,0 +1,144 @@
+{
+  "state": "populated",
+  "schema_version": "2.2-layered-multimodal-ocr",
+  "resource_dir": "E:\\Work\\AI助教\\RAG_Resources\\knowledge_bases\\Analog-Electronics---First-Two-Chapters",
+  "embedding_model": "E:\\Work\\AI助教\\models\\paraphrase-multilingual-MiniLM-L12-v2",
+  "dimension": 384,
+  "documents": 1,
+  "text_pages": 121,
+  "ocr_pages": 121,
+  "questions": 0,
+  "excluded_sources": [],
+  "chunks": 406,
+  "layout_elements": 264,
+  "circuit_diagrams": 65,
+  "formula_elements": 105,
+  "formula_processing": {
+    "detected_regions": 2916,
+    "inline_regions_kept_in_text": 2633,
+    "display_candidates": 283,
+    "indexed_formulas": 105,
+    "rejected_or_merged_regions": 2811,
+    "uncertain_formulas": 0,
+    "recognition": "PDF-Extract-Kit localization + native PDF geometry LaTeX + qwen/qwen3-vl-flash scan fallback"
+  },
+  "table_elements": 6,
+  "discarded_pages": 0,
+  "knowledge_graph": {
+    "nodes": 1844,
+    "edges": 5331,
+    "neo4j": {
+      "enabled": true,
+      "nodes": 1844,
+      "edges": 5331
+    }
+  },
+  "qdrant": {
+    "enabled": false,
+    "mode": "faiss-fallback",
+    "reason": "Unexpected Response: 502 (Bad Gateway)\nRaw response content:\nb''"
+  },
+  "vision_model": "qwen/qwen3-vl-flash",
+  "pdf_extract_kit": {
+    "enabled": true,
+    "root": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit",
+    "device": "0",
+    "source_revision": "PDF-Extract-Kit-1.0.0-released/da99314",
+    "layout_weights": {
+      "path": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit\\models\\Layout\\YOLO\\yolov10l_ft.pt",
+      "exists": true,
+      "size": 52275810,
+      "sha256": "fad2c4c27428e5525460321a099327bb9810880934ee9e3e1a68d25d22887cd6"
+    },
+    "formula_weights": {
+      "path": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit\\models\\MFD\\YOLO\\yolo_v8_ft.pt",
+      "exists": true,
+      "size": 349867002,
+      "sha256": "41029d5abb9b0b6df825ecaf8adf9151762ea0688ac0fc4ea0ea34ab9a5808fc"
+    }
+  },
+  "chapter_limit": null,
+  "sources": [
+    "模拟电子技术基础-前两章.pdf"
+  ],
+  "validation": {
+    "status": "passed",
+    "chunks": 406,
+    "vectors": 406,
+    "vector_dimension": 384,
+    "graph_nodes": 1844,
+    "graph_edges": 5331,
+    "question_chunks": 0,
+    "dangling_graph_edges": 0,
+    "concept_nodes": 522,
+    "placeholder_text_chunks": 0
+  },
+  "extraction_quality": {
+    "text_chunks": 146,
+    "placeholder_text_chunks": 0,
+    "concept_nodes": 522
+  },
+  "pipeline_layers": {
+    "document_cleaning": {
+      "status": "ready",
+      "pages_reviewed": 121,
+      "pages_discarded": 0,
+      "partial_characters_removed": 0,
+      "question_banks_excluded": 0
+    },
+    "document_parsing": {
+      "status": "ready",
+      "engine": "PyMuPDF text + Qwen3-VL scanned-page OCR + PDF-Extract-Kit layout",
+      "ocr_pages": 121,
+      "placeholder_text_chunks": 0,
+      "layout_elements": 264,
+      "preserves_page_bbox": true
+    },
+    "modality_processing": {
+      "status": "ready",
+      "text_chunks": 146,
+      "circuit_diagrams": 65,
+      "formula_elements": 105,
+      "formula_processing": {
+        "detected_regions": 2916,
+        "inline_regions_kept_in_text": 2633,
+        "display_candidates": 283,
+        "indexed_formulas": 105,
+        "rejected_or_merged_regions": 2811,
+        "uncertain_formulas": 0,
+        "recognition": "PDF-Extract-Kit localization + native PDF geometry LaTeX + qwen/qwen3-vl-flash scan fallback"
+      },
+      "table_elements": 6,
+      "circuit_vision_model": "qwen/qwen3-vl-flash"
+    },
+    "knowledge_fusion": {
+      "status": "ready",
+      "vector_store": "faiss",
+      "vector_points": 406,
+      "graph_nodes": 1844,
+      "graph_edges": 5331,
+      "graph_store": "local-json"
+    },
+    "retrieval_service": {
+      "status": "ready",
+      "strategies": [
+        "vector",
+        "BM25",
+        "knowledge-graph",
+        "rerank"
+      ],
+      "question_bank_search": false
+    },
+    "application": {
+      "status": "ready",
+      "context_modalities": [
+        "text",
+        "formula",
+        "table",
+        "circuit-description",
+        "netlist",
+        "image"
+      ]
+    }
+  }
+}

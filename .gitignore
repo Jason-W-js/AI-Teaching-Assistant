@@ -17,3 +17,8 @@ logs/
 third_party/
 data/vector_stores/pdfkit_smoke/
 data/neo4j/
+
+# Runtime-generated teaching data is ignored after the one-time snapshot.
+RAG_Resources/knowledge_bases/*/
+data/vector_stores/
+data/homework/

@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "root": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit",
+  "device": "0",
+  "source_revision": "PDF-Extract-Kit-1.0.0-released/da99314",
+  "layout_weights": {
+    "path": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit\\models\\Layout\\YOLO\\yolov10l_ft.pt",
+    "exists": true,
+    "size": 52275810,
+    "sha256": "fad2c4c27428e5525460321a099327bb9810880934ee9e3e1a68d25d22887cd6"
+  },
+  "formula_weights": {
+    "path": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit\\models\\MFD\\YOLO\\yolo_v8_ft.pt",
+    "exists": true,
+    "size": 349867002,
+    "sha256": "41029d5abb9b0b6df825ecaf8adf9151762ea0688ac0fc4ea0ea34ab9a5808fc"
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "document_cleaning": {
+    "status": "ready",
+    "pages_reviewed": 465,
+    "pages_discarded": 0,
+    "partial_characters_removed": 0,
+    "question_banks_excluded": 0
+  },
+  "document_parsing": {
+    "status": "ready",
+    "engine": "PyMuPDF text + Qwen3-VL scanned-page OCR + PDF-Extract-Kit layout",
+    "ocr_pages": 462,
+    "placeholder_text_chunks": 3,
+    "layout_elements": 1485,
+    "preserves_page_bbox": true
+  },
+  "modality_processing": {
+    "status": "ready",
+    "text_chunks": 665,
+    "circuit_diagrams": 469,
+    "formula_elements": 696,
+    "formula_processing": {
+      "detected_regions": 11278,
+      "inline_regions_kept_in_text": 10225,
+      "display_candidates": 696,
+      "recognized_formulas": 422,
+      "fallback_formulas": 246,
+      "indexed_formulas": 696,
+      "rejected_or_merged_regions": 0,
+      "uncertain_formulas": 277,
+      "recognition": "PDF-Extract-Kit localization + native PDF geometry LaTeX + qwen/qwen3-vl-flash scan fallback"
+    },
+    "table_elements": 33,
+    "circuit_vision_model": "qwen/qwen3-vl-flash"
+  },
+  "knowledge_fusion": {
+    "status": "ready",
+    "vector_store": "faiss",
+    "vector_points": 2074,
+    "circuit_vector_points": 469,
+    "circuit_vector_store": "faiss",
+    "graph_nodes": 12987,
+    "graph_edges": 35437,
+    "chapter_summaries": 23,
+    "graph_store": "local-json"
+  },
+  "retrieval_service": {
+    "status": "ready",
+    "strategies": [
+      "vector",
+      "BM25",
+      "knowledge-graph",
+      "rerank",
+      "circuit-image"
+    ],
+    "question_bank_search": false,
+    "circuit_image_min_score": 0.7,
+    "circuit_image_max_references": 2
+  },
+  "application": {
+    "status": "ready",
+    "context_modalities": [
+      "text",
+      "formula",
+      "table",
+      "circuit-description",
+      "netlist",
+      "image"
+    ]
+  }
+}

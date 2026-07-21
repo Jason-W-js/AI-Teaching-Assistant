@@ -1,0 +1,168 @@
+{
+  "state": "populated",
+  "schema_version": "2.3-circuit-image-retrieval",
+  "resource_dir": "E:\\Work\\AI助教\\RAG_Resources\\knowledge_bases\\kb-mrtgvd45-nw4rim1",
+  "embedding_model": "E:\\Work\\AI助教\\models\\paraphrase-multilingual-MiniLM-L12-v2",
+  "dimension": 384,
+  "documents": 1,
+  "text_pages": 465,
+  "ocr_pages": 462,
+  "questions": 0,
+  "excluded_sources": [],
+  "chunks": 2074,
+  "layout_elements": 1485,
+  "circuit_diagrams": 469,
+  "formula_elements": 696,
+  "formula_processing": {
+    "detected_regions": 11278,
+    "inline_regions_kept_in_text": 10225,
+    "display_candidates": 696,
+    "recognized_formulas": 422,
+    "fallback_formulas": 246,
+    "indexed_formulas": 696,
+    "rejected_or_merged_regions": 0,
+    "uncertain_formulas": 277,
+    "recognition": "PDF-Extract-Kit localization + native PDF geometry LaTeX + qwen/qwen3-vl-flash scan fallback"
+  },
+  "table_elements": 33,
+  "discarded_pages": 0,
+  "knowledge_graph": {
+    "nodes": 8800,
+    "edges": 24386,
+    "chapters": 7,
+    "neo4j": {
+      "enabled": true,
+      "nodes": 12987,
+      "edges": 35437
+    }
+  },
+  "qdrant": {
+    "enabled": false,
+    "mode": "faiss-fallback",
+    "reason": "Unexpected Response: 502 (Bad Gateway)\nRaw response content:\nb''",
+    "qwen_multimodal_enabled": true,
+    "multimodal_qdrant_enabled": false,
+    "multimodal_points": 469,
+    "circuit_points": 469,
+    "local_faiss_enabled": true,
+    "multimodal_model": "qwen3-vl-embedding",
+    "multimodal_dimension": 1024,
+    "circuit_image_min_score": 0.7,
+    "circuit_image_max_references": 2,
+    "local_faiss_index": "circuit_vectors.faiss",
+    "local_faiss_items": "circuit_vector_items.jsonl"
+  },
+  "vision_model": "qwen/qwen3-vl-flash",
+  "pdf_extract_kit": {
+    "enabled": true,
+    "root": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit",
+    "device": "0",
+    "source_revision": "PDF-Extract-Kit-1.0.0-released/da99314",
+    "layout_weights": {
+      "path": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit\\models\\Layout\\YOLO\\yolov10l_ft.pt",
+      "exists": true,
+      "size": 52275810,
+      "sha256": "fad2c4c27428e5525460321a099327bb9810880934ee9e3e1a68d25d22887cd6"
+    },
+    "formula_weights": {
+      "path": "E:\\Work\\AI助教\\third_party\\PDF-Extract-Kit\\models\\MFD\\YOLO\\yolo_v8_ft.pt",
+      "exists": true,
+      "size": 349867002,
+      "sha256": "41029d5abb9b0b6df825ecaf8adf9151762ea0688ac0fc4ea0ea34ab9a5808fc"
+    }
+  },
+  "chapter_limit": null,
+  "sources": [
+    "电子电路基础.pdf"
+  ],
+  "validation": {
+    "status": "passed",
+    "chunks": 2074,
+    "vectors": 2074,
+    "vector_dimension": 384,
+    "graph_nodes": 8800,
+    "graph_edges": 24386,
+    "question_chunks": 0,
+    "dangling_graph_edges": 0,
+    "concept_nodes": 1870,
+    "placeholder_text_chunks": 3
+  },
+  "extraction_quality": {
+    "text_chunks": 665,
+    "placeholder_text_chunks": 3,
+    "concept_nodes": 1870
+  },
+  "pipeline_layers": {
+    "document_cleaning": {
+      "status": "ready",
+      "pages_reviewed": 465,
+      "pages_discarded": 0,
+      "partial_characters_removed": 0,
+      "question_banks_excluded": 0,
+      "exercise_pages_hidden_from_chapter_summary": 78
+    },
+    "document_parsing": {
+      "status": "ready",
+      "engine": "PyMuPDF text + Qwen3-VL scanned-page OCR + PDF-Extract-Kit layout",
+      "ocr_pages": 462,
+      "placeholder_text_chunks": 3,
+      "layout_elements": 1485,
+      "preserves_page_bbox": true
+    },
+    "modality_processing": {
+      "status": "ready",
+      "text_chunks": 665,
+      "circuit_diagrams": 469,
+      "formula_elements": 696,
+      "formula_processing": {
+        "detected_regions": 11278,
+        "inline_regions_kept_in_text": 10225,
+        "display_candidates": 696,
+        "recognized_formulas": 422,
+        "fallback_formulas": 246,
+        "indexed_formulas": 696,
+        "rejected_or_merged_regions": 0,
+        "uncertain_formulas": 277,
+        "recognition": "PDF-Extract-Kit localization + native PDF geometry LaTeX + qwen/qwen3-vl-flash scan fallback"
+      },
+      "table_elements": 33,
+      "circuit_vision_model": "qwen/qwen3-vl-flash"
+    },
+    "knowledge_fusion": {
+      "status": "ready",
+      "vector_store": "faiss",
+      "vector_points": 2074,
+      "circuit_vector_points": 469,
+      "circuit_vector_store": "faiss",
+      "graph_nodes": 8800,
+      "graph_edges": 24386,
+      "chapter_summaries": 7,
+      "graph_store": "local-json"
+    },
+    "retrieval_service": {
+      "status": "ready",
+      "strategies": [
+        "vector",
+        "BM25",
+        "knowledge-graph",
+        "rerank",
+        "circuit-image"
+      ],
+      "question_bank_search": false,
+      "circuit_image_min_score": 0.7,
+      "circuit_image_max_references": 2
+    },
+    "application": {
+      "status": "ready",
+      "context_modalities": [
+        "text",
+        "formula",
+        "table",
+        "circuit-description",
+        "netlist",
+        "image"
+      ]
+    }
+  },
+  "display_name": "电子电路基础"
+}
