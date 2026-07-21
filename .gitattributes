@@ -1,2 +1,5 @@
-RAG_Resources/knowledge_bases/**/*.pdf filter=lfs diff=lfs merge=lfs -text
-data/homework/**/source.pdf filter=lfs diff=lfs merge=lfs -text
+RAG_Resources/knowledge_bases/Analog-Electronics---First-Two-Chapters/*.pdf filter=lfs diff=lfs merge=lfs -text
+RAG_Resources/knowledge_bases/kb-mrtgvd45-nw4rim1/*.pdf filter=lfs diff=lfs merge=lfs -text
+data/homework/1dbe9ab699d74d01bbfec59bec32cb71/source.pdf filter=lfs diff=lfs merge=lfs -text
+data/homework/286b91f56a7a4c958e31fa7d750f67bb/source.pdf filter=lfs diff=lfs merge=lfs -text
+data/homework/ea761a484f474f91baa637750d761b6f/source.pdf filter=lfs diff=lfs merge=lfs -text
