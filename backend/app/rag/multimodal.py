@@ -39,7 +39,7 @@ PARTIAL_NOISE_MARKERS = (
     "扫码", "公众号", "购买正版", "资源下载", "广告", "网址", "http://", "https://",
 )
 
-PAGE_CLEANING_POLICY_VERSION = "2.0-exclude-exercises"
+PAGE_CLEANING_POLICY_VERSION = "2.1-exercise-range-fallback"
 
 SCANNED_PAGE_PLACEHOLDER = "[本页主要包含电路图、公式或其他图形内容]"
 PAGE_OCR_SCHEMA_VERSION = "1.0-qwen-page-ocr"
@@ -191,19 +191,37 @@ class CompatibleMultimodalClient:
 def _page_cleaning_decisions(
     pages: list[PageDocument], client: CompatibleMultimodalClient | None
 ) -> dict[int, dict[str, Any]]:
-    decisions = {
-        page.page: {
+    decisions: dict[int, dict[str, Any]] = {}
+    inside_exercises = False
+    exercise_heading = re.compile(
+        r"^(?:习题|复习题|思考题|自测题|练习题|部分习题参考答案)(?:\s|$)"
+    )
+    for page in sorted(pages, key=lambda item: item.page):
+        lines = [
+            re.sub(r"\s+", " ", line).strip()
+            for line in page.text.splitlines()
+            if line.strip()
+        ]
+        if lines and (
+            _normalize_chapter_heading(lines[0])
+            or re.match(r"^附录\s+[^0-9]", lines[0])
+        ):
+            inside_exercises = False
+        if any(exercise_heading.match(line) for line in lines[:8]):
+            inside_exercises = True
+        decisions[page.page] = {
             "page": page.page,
             "source_page": page.source_page or page.page,
-            "keep": True,
-            "page_type": "course_content",
-            "reason": "默认保留课程内容",
+            "keep": not inside_exercises,
+            "page_type": "exercise" if inside_exercises else "course_content",
+            "reason": (
+                "规则识别为连续课后习题区间"
+                if inside_exercises else "默认保留课程内容"
+            ),
             "method": "rule",
             "cleaning_policy_version": PAGE_CLEANING_POLICY_VERSION,
             "remove_fragments": [],
         }
-        for page in pages
-    }
     if not client or not client.config.enabled:
         return decisions
     for start in range(0, len(pages), 12):
@@ -2046,6 +2064,8 @@ def build_chapter_knowledge_summaries(
             if isinstance(page, int) and page > 0
         }
         summary["pages"].update(chunk_pages)
+        if chunk.doc_type == "exercise":
+            continue
         for concept in dict.fromkeys(chunk.knowledge_tags):
             concept_name = normalize_concept_name(concept)
             if (
@@ -2116,7 +2136,7 @@ def build_local_knowledge_graph(chunks: Iterable[TextChunk]) -> dict[str, Any]:
             seen_edges.add(edge)
 
     for chunk in chunk_items:
-        if chunk.doc_type == "question":
+        if chunk.doc_type in {"question", "exercise"}:
             continue
         document_id = "document:" + hashlib.sha1(chunk.source.encode("utf-8")).hexdigest()[:16]
         source_stem = Path(chunk.source).stem

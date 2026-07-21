@@ -274,6 +274,11 @@ def test_chapter_knowledge_summaries_group_concepts_with_evidence_and_pages():
             page_end=2, doc_type="textbook", knowledge_tags=["PN结", "二极管"],
         ),
         TextChunk(
+            id="chapter-1-exercise", text="习题", source="lesson.pdf",
+            chapter="第一章 常用半导体器件", section="习题", page_start=3,
+            page_end=3, doc_type="exercise", knowledge_tags=["习题伪知识点"],
+        ),
+        TextChunk(
             id="chapter-2-page-10", text="共射放大电路", source="lesson.pdf",
             chapter="第二章 基本放大电路", section="2.1 放大", page_start=10,
             page_end=10, doc_type="textbook", knowledge_tags=["放大电路", "晶体管"],
@@ -288,7 +293,8 @@ def test_chapter_knowledge_summaries_group_concepts_with_evidence_and_pages():
     ]
     assert chapters[0]["concept_count"] == 3
     assert chapters[0]["page_start"] == 1
-    assert chapters[0]["page_end"] == 2
+    assert chapters[0]["page_end"] == 3
+    assert all(item["name"] != "习题伪知识点" for item in chapters[0]["concepts"])
     pn_junction = next(
         concept for concept in chapters[0]["concepts"] if concept["name"] == "PN结"
     )
@@ -539,6 +545,43 @@ def test_page_cleaning_still_protects_non_exercise_technical_content():
 
     assert decision["keep"] is True
     assert "安全策略强制保留" in decision["reason"]
+
+
+def test_rule_page_cleaning_excludes_exercise_range_until_next_chapter():
+    pages = [
+        PageDocument(
+            "第一章 半导体基础\nPN结具有单向导电性。",
+            "lesson.pdf", 1, "第一章 半导体基础", "1.1 PN结",
+        ),
+        PageDocument(
+            "习题\n1.1 试分析二极管电路。",
+            "lesson.pdf", 2, "第一章 半导体基础", "习题",
+        ),
+        PageDocument(
+            "3\n第一章 半导体基础\n1.2 画出输出波形。",
+            "lesson.pdf", 3, "第一章 半导体基础", "习题",
+        ),
+        PageDocument(
+            "第二章 晶体管放大电路\n晶体管具有电流放大作用。",
+            "lesson.pdf", 4, "第二章 晶体管放大电路", "2.1 晶体管",
+        ),
+        PageDocument(
+            "附录 电子电路的计算机辅助设计\nOrCAD 电路仿真。",
+            "lesson.pdf", 5, "附录 电子电路的计算机辅助设计", "附录 1.1",
+        ),
+        PageDocument(
+            "部分习题参考答案\n第一章\n1.1 A",
+            "lesson.pdf", 6, "部分习题参考答案", "部分习题参考答案",
+        ),
+    ]
+
+    decisions = _page_cleaning_decisions(pages, None)
+
+    assert [decisions[page]["keep"] for page in range(1, 7)] == [
+        True, False, False, True, True, False
+    ]
+    assert decisions[2]["page_type"] == "exercise"
+    assert decisions[3]["page_type"] == "exercise"
 
 
 def test_waveform_figure_is_not_promoted_to_circuit_when_vision_fails(monkeypatch):
