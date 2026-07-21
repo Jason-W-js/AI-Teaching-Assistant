@@ -265,8 +265,8 @@ function SubmissionPanel({
         {submission.status === 'grading' && (
           <div className="submission-processing">
             <LoaderCircle className="spin" size={24} />
-            <strong>qwen3-vl-plus 正在识别并逐题评分</strong>
-            <span>完成后由 qwen3-vl-flash 独立复核</span>
+            <strong>qwen3-vl-flash 正在识别并逐题评分</strong>
+            <span>完成后由 qwen3-vl-8b-instruct 独立复核</span>
           </div>
         )}
         {submission.processing_error && (
@@ -308,7 +308,7 @@ function SubmissionPanel({
             {submission.review.passed ? <ShieldCheck size={18} /> : <AlertTriangle size={18} />}
             <div>
               <strong>{deterministicReview ? '固定答案规则校验完成' : submission.review.passed ? '审查模型确认批改无误' : '审查模型发现疑点'}</strong>
-              <span>{deterministicReview ? '本地确定性规则' : 'qwen3-vl-flash'} · 置信度 {Math.round(submission.review.confidence * 100)}%</span>
+              <span>{deterministicReview ? '本地确定性规则' : submission.review.review_model} · 置信度 {Math.round(submission.review.confidence * 100)}%</span>
               {submission.review.issues.map((issue) => <p key={issue}>{issue}</p>)}
               {submission.review.recommendation && <p>{submission.review.recommendation}</p>}
             </div>

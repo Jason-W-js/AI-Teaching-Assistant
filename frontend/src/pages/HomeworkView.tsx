@@ -181,7 +181,7 @@ function StudentGrading({ homework }: { homework: Homework }) {
     return (
       <div className="student-grading-wait">
         <LoaderCircle className="spin" size={24} />
-        <div><strong>AI 正在批改你的答案</strong><span>qwen3-vl-plus 评分后，还会由 qwen3-vl-flash 独立复核。</span></div>
+        <div><strong>AI 正在批改你的答案</strong><span>qwen3-vl-flash 评分后，还会由 qwen3-vl-8b-instruct 独立复核。</span></div>
       </div>
     )
   }

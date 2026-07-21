@@ -49,10 +49,10 @@ class Settings:
         "QWEN_HOMEWORK_EXTRACTION_MODEL", "qwen3-vl-flash"
     )
     qwen_homework_grading_model: str = os.getenv(
-        "QWEN_HOMEWORK_GRADING_MODEL", "qwen3-vl-plus"
+        "QWEN_HOMEWORK_GRADING_MODEL", "qwen3-vl-flash"
     )
     qwen_homework_review_model: str = os.getenv(
-        "QWEN_HOMEWORK_REVIEW_MODEL", "qwen3-vl-flash"
+        "QWEN_HOMEWORK_REVIEW_MODEL", "qwen3-vl-8b-instruct"
     )
     qwen_vision_max_tokens: int = int(os.getenv("QWEN_VISION_MAX_TOKENS", "8192"))
     qwen_multimodal_embedding_model: str = os.getenv(
