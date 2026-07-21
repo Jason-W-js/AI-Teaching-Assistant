@@ -98,7 +98,7 @@ def test_ai_page_prefilter_keeps_candidates_and_neighbor_pages(tmp_path):
                 {
                     "page": page_number,
                     "kind": (
-                        "question" if page_number == 3
+                        "mixed" if page_number == 3
                         else "answer" if page_number == 4
                         else "non_question"
                     ),
@@ -124,9 +124,9 @@ def test_ai_page_prefilter_keeps_candidates_and_neighbor_pages(tmp_path):
         cache_path=cache_path,
     )
 
-    assert [page["page"] for page in selected] == [2, 3, 4, 5]
+    assert [page["page"] for page in selected] == [2, 3, 4]
     assert selected[0]["prefilter_neighbor"] is True
-    assert selected[1]["prefilter_kind"] == "question"
+    assert selected[1]["prefilter_kind"] == "mixed"
     assert selected[2]["prefilter_kind"] == "answer"
     assert len(client.calls) == 2
     assert all(call[1].startswith(b"\xff\xd8") for call in client.calls)
@@ -141,7 +141,7 @@ def test_ai_page_prefilter_keeps_candidates_and_neighbor_pages(tmp_path):
         neighbor_radius=1,
         cache_path=cache_path,
     )
-    assert [page["page"] for page in cached_selected] == [2, 3, 4, 5]
+    assert [page["page"] for page in cached_selected] == [2, 3, 4]
     assert cached_client.calls == []
     assert "已复用同一原文件的 AI 页面粗筛缓存" in cached_warnings
 

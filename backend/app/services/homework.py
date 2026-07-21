@@ -1769,7 +1769,14 @@ def _select_candidate_pages(
 
     available_numbers = {int(page["page"]) for page in pages}
     expanded_numbers = set(candidate_numbers)
-    for page_number in candidate_numbers:
+    expansion_seeds = {
+        page_number
+        for page_number in candidate_numbers
+        if classifications[page_number]["kind"] in {"mixed", "uncertain"}
+        or float(classifications[page_number]["confidence"])
+        < PAGE_PREFILTER_EXCLUDE_CONFIDENCE
+    }
+    for page_number in expansion_seeds:
         expanded_numbers.update(
             nearby
             for nearby in range(
@@ -1793,7 +1800,7 @@ def _select_candidate_pages(
             selected.append(page)
     warnings.append(
         f"AI 页面粗筛：从 {len(pages)} 页中选出 {len(candidate_numbers)} 页，"
-        f"连同相邻页共 {len(selected)} 页进入高清提取"
+        f"为混合/疑似页扩展相邻页后，共 {len(selected)} 页进入高清提取"
     )
     return selected, warnings
 
